@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# BrightSign NPU Argus Extension - Complete Build Script
+# BrightSign NPU Anomaly Detection - Complete Build Script
 # This script automates all the steps from the README.md
 
 set -e  # Exit on error
@@ -151,8 +151,10 @@ cleanup_all() {
     
     # Remove generated packages
     print_status "Removing generated packages..."
-    rm -f argus-dev-*.zip
-    rm -f argus-ext-*.zip
+    rm -f anomaly-detection-dev-*.zip
+    rm -f anomaly-detection-ext-*.zip
+    rm -f argus-dev-*.zip  # Legacy cleanup
+    rm -f argus-ext-*.zip  # Legacy cleanup
     rm -f gaze-dev-*.zip  # Legacy cleanup
     rm -f gaze-ext-*.zip  # Legacy cleanup
     
@@ -493,8 +495,8 @@ step4_package() {
     
     prompt_continue "This will:
 - Use package script to create packages
-- Create development package (argus-dev)
-- Create production extension package (argus-ext)"
+- Create development package (anomaly-detection-dev)
+- Create production extension package (anomaly-detection-ext)"
 
     cd "$project_root"
     
@@ -509,13 +511,13 @@ step4_package() {
     fi
     
     print_status "Step 4 completed successfully!"
-    print_status "Development package: argus-dev-*.zip"
-    print_status "Production extension: argus-ext-*.zip"
+    print_status "Development package: anomaly-detection-dev-*.zip"
+    print_status "Production extension: anomaly-detection-ext-*.zip"
 }
 
 # Main execution
 main() {
-    print_header "BrightSign NPU Argus Extension - Complete Build"
+    print_header "BrightSign NPU Anomaly Detection - Complete Build"
     
     if [ "$AUTO_MODE" = true ]; then
         print_status "Running in automatic mode - no prompts"
@@ -544,8 +546,8 @@ main() {
     print_header "BUILD COMPLETE"
     print_status "All steps completed successfully!"
     print_status "Check the install directory for the built files"
-    print_status "Development package: argus-dev-*.zip"
-    print_status "Production extension: argus-ext-*.zip"
+    print_status "Development package: anomaly-detection-dev-*.zip"
+    print_status "Production extension: anomaly-detection-ext-*.zip"
     
     print_warning "Don't forget to unsecure your BrightSign player as described in the README!"
 }
