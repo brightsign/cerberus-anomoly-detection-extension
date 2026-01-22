@@ -1,0 +1,716 @@
+#!/bin/bash
+### BEGIN INIT INFO
+# Provides:          bsext-anomaly-detection
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: BrightSign Anomaly Detection Extension
+# Description:       Runs the BrightSign NPU-based anomaly detection service
+### END INIT INFO
+
+# Source function library if it exists
+[ -f /etc/init.d/functions ] && . /etc/init.d/functions
+
+SCRIPT_PATH=$(dirname $(realpath $0))
+
+# CRITICAL FIX: Replace legacy extension names with current name if present
+# This handles the case where the directory was renamed but paths still reference old name
+SCRIPT_PATH=$(echo "$SCRIPT_PATH" | sed 's/ext_npu_gaze/ext_npu_anomaly/g' | sed 's/ext_npu_anomaly/ext_npu_anomaly/g')
+
+DAEMON_NAME="bsext-anomaly"
+PIDFILE="/var/run/${DAEMON_NAME}.pid"
+STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
+MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
+
+# defaults -- these can be overridden by environment variables
+DISABLE_AUTO_START=false
+
+# Auto-detection will automatically find the best available video source:
+# Priority: Registry settings > Auto-detected USB cameras > Auto-detected HDMI/default device
+# 
+# Auto-detection preference:
+#   1. USB cameras: /dev/video1, /dev/video2, etc. (checked first)
+#   2. HDMI/default: /dev/video0 (used if no USB cameras found)
+#
+# Registry settings (optional):
+#   bsext-anomaly-video-device : Video device path (e.g., /dev/video0, /dev/video1)
+#   bsext-anomaly-rtsp-server  : RTSP server IP:port (e.g., 192.168.0.203:8554)
+#
+# Examples:
+#   # Use auto-detection (no configuration needed):
+#   ./bsext_init start
+#
+#   # Explicitly set a device:
+#   registry write extension bsext-anomaly-video-device /dev/video1
+#
+#   # Use RTSP stream:
+#   registry write extension bsext-anomaly-video-device rtsp://192.168.0.203:8554/mystream
+
+# Common setup function to determine SOC model and video device
+get_soc_name() {
+    # figure out the SOC model -- default to RK3588
+    SOC_NAME=RK3588
+    if [ -f /sys/firmware/devicetree/base/compatible ]; then
+        # Use strings command to handle null bytes in devicetree properly
+        COMPATIBLE=$(strings /sys/firmware/devicetree/base/compatible 2>/dev/null)
+        
+        # Look for rockchip,rk3588 pattern in the compatible string
+        if echo "$COMPATIBLE" | grep -q "rockchip,rk3588"; then
+            SOC_NAME="RK3588"
+        fi
+
+        # Look for rockchip,rk3576 pattern in the compatible string
+        if echo "$COMPATIBLE" | grep -q "rockchip,rk3576"; then
+            SOC_NAME="RK3576"
+        fi
+
+        # Look for rockchip,rk3568 pattern in the compatible string
+        if echo "$COMPATIBLE" | grep -q "rockchip,rk3568"; then
+            SOC_NAME="RK3568"
+        fi
+    else
+        # In development environments or non-XT5 hardware, default to RK3588
+        echo "WARNING: Unable to determine SOC model, defaulting to RK3588 for development" >&2
+    fi
+
+    # Return the SOC model
+    echo "${SOC_NAME}"
+}
+
+detect_video_sources() {
+    echo "Legacy video source detection (fallback only)..." >&2
+    
+    # Array to store found sources
+    DETECTED_SOURCES=""
+    
+    # Check for USB cameras
+    echo "  Checking for USB cameras..." >&2
+    for video_dev in /dev/video*; do
+        # Skip non-numeric video devices
+        if ! echo "$video_dev" | grep -q '/dev/video[0-9]'; then
+            continue
+        fi
+        
+        if [ -c "$video_dev" ]; then
+            # More thorough validation - try to query device capabilities
+            if command -v v4l2-ctl >/dev/null 2>&1; then
+                # Use v4l2-ctl to check if it's a real camera
+                if v4l2-ctl --device="$video_dev" --list-formats-ext >/dev/null 2>&1; then
+                    echo "  Found USB camera: $video_dev" >&2
+                    DETECTED_SOURCES="$DETECTED_SOURCES $video_dev"
+                else
+                    echo "  Device $video_dev exists but is not a functional camera" >&2
+                fi
+            else
+                # Fallback: try to open the device briefly to test if it's functional
+                if timeout 2 cat "$video_dev" >/dev/null 2>&1; then
+                    echo "   Found USB camera: $video_dev" >&2
+                    DETECTED_SOURCES="$DETECTED_SOURCES $video_dev"
+                else
+                    echo "  Device $video_dev exists but is not accessible" >&2
+                fi
+            fi
+        fi
+    done
+    
+    echo "  Legacy detection complete. Found sources: '$DETECTED_SOURCES'" >&2
+    echo "$DETECTED_SOURCES"
+}
+
+# Function to get the video source from registry or auto-detect
+get_video_source() {
+    local video_source
+    video_source=$(registry extension ${DAEMON_NAME}-video-device)
+    echo "Video source from registry: '$video_source'" >&2
+    
+    if [ -z "$video_source" ]; then
+        # Registry is empty, try auto-detection
+        echo "Registry empty, attempting auto-detection..." >&2
+        echo "Listing all video devices:" >&2
+        ls -la /dev/video* 2>&1 | grep -E "^crw" >&2
+        
+        # Check for video devices in priority order
+        # Priority 1: USB cameras (video1, video2, etc.) - skip video0 as it's usually HDMI
+        echo "Checking for USB cameras (video1-9)..." >&2
+        for video_dev in /dev/video{1..9}; do
+            if [ -c "$video_dev" ]; then
+                # Extract video device number (e.g., "1" from "/dev/video1")
+                local dev_num=$(echo "$video_dev" | grep -o '[0-9]$')
+                local device_name=$(cat /sys/class/video4linux/video${dev_num}/name 2>/dev/null)
+                
+                echo "  Found $video_dev: $device_name" >&2
+                
+                # Check if it's a USB camera (not HDMI receiver)
+                if [ -n "$device_name" ] && ! echo "$device_name" | grep -qi "hdmi"; then
+                    video_source="$video_dev"
+                    echo "Auto-detected USB camera: $video_source ($device_name)" >&2
+                    break
+                fi
+            fi
+        done
+        
+        # Priority 2: If no USB camera found, check video0 (HDMI or first camera)
+        if [ -z "$video_source" ] && [ -c "/dev/video0" ]; then
+            local device_name=$(cat /sys/class/video4linux/video0/name 2>/dev/null)
+            echo "Checking /dev/video0 (${device_name})..." >&2
+            video_source="/dev/video0"
+            echo "Using video device: $video_source ($device_name)" >&2
+        fi
+        
+        # Fallback: default to /dev/video0 if nothing detected
+        if [ -z "$video_source" ]; then
+            video_source="/dev/video0"
+            echo "No devices detected, defaulting to: $video_source" >&2
+        fi
+    fi
+    
+    echo "$video_source"
+}
+
+# Common function to run the anomaly detection service
+run_anomaly_detection() {
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    cd ${SOC_HOME}
+
+    # NOTE: DO NOT pass video source as positional argument - it overrides registry!
+    # The application will automatically read bsext-anomaly-video-device from registry
+    # 
+    # NOTE: DO NOT pass config.json as argument - let app use its own search logic:
+    #   1. CLI: --config <path>
+    #   2. ENV: $BSEXT_CONFIG  
+    #   3. SD:  /storage/sd/configs/config.json (writable override)
+    #   4. PKG: ${SOC_HOME}/configs/config.json (read-only default)
+    
+    echo "Starting anomaly detection service..."
+    echo "Config will be auto-detected (priority: SD card > package default)"
+    
+    # Get video source (from registry or auto-detect)
+    local video_source=$(get_video_source)
+    echo "Video source detected: ${video_source}"
+    
+    # Update config.json with detected video device
+    # Priority: SD card config > package config
+    local config_file="${SOC_HOME}/config/videowall.json"
+    local sd_config="/storage/sd/configs/config.json"
+    
+    # Use SD card config if it exists, otherwise use package config
+    if [ -f "${sd_config}" ]; then
+        config_file="${sd_config}"
+        echo "Using SD card config: ${sd_config}"
+    else
+        echo "Using package config: ${config_file}"
+    fi
+    
+    # Update camera_device in the config file
+    if [ -f "${config_file}" ]; then
+        echo "Updating camera_device in config to: ${video_source}"
+        
+        # Show current value before update
+        local current_device=$(grep -o '"camera_device"[[:space:]]*:[[:space:]]*"[^"]*"' "${config_file}" 2>/dev/null || echo "not found")
+        echo "  Current config value: ${current_device}"
+        
+        # Create backup
+        cp "${config_file}" "${config_file}.bak" 2>/dev/null || true
+        
+        # Update the camera_device field in JSON using sed
+        # This will match "camera_device": "anything" and replace with detected device
+        sed -i.tmp "s|\"camera_device\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"camera_device\": \"${video_source}\"|" "${config_file}"
+        rm -f "${config_file}.tmp"
+        
+        # Verify the update worked
+        local new_device=$(grep -o '"camera_device"[[:space:]]*:[[:space:]]*"[^"]*"' "${config_file}" 2>/dev/null || echo "not found")
+        echo "  Updated config value: ${new_device}"
+        
+        if [ "${current_device}" = "${new_device}" ] && [ "${video_source}" != "/dev/video0" ]; then
+            echo "  WARNING: Config update may have failed - value unchanged!"
+        fi
+    else
+        echo "WARNING: Config file not found: ${config_file}"
+    fi
+    
+    # Debug: Show exactly what we're passing to anomaly_detection
+    echo "DEBUG: SOC_HOME = ${SOC_HOME}"
+    echo "DEBUG: Video source = ${video_source}"
+    echo "DEBUG: Config file = ${config_file}"
+    echo "DEBUG: About to execute: ${SOC_HOME}/anomaly_detection"
+    
+    # Default to running in foreground
+    local background=$1
+    
+    # LD_LIBRARY_PATH is already set by setup_gstreamer_env, which includes bin/ directory
+    # No need to override it here
+    if [ "$background" = "true" ]; then
+        # Run as a daemon in the background with auto-restart on config change
+        echo "DEBUG: Starting daemon with auto-restart support"
+        echo "DEBUG: Executable: ${SOC_HOME}/anomaly_detection"
+        
+        # Create a wrapper script that handles exit code 42 (config change)
+        # Redirect all output to a log file for debugging
+        cat > /tmp/anomaly_detection_wrapper.sh << 'WRAPPER_EOF'
+#!/bin/bash
+# Auto-restart wrapper for anomaly_detection
+# Restarts on exit code 42 (config change detected)
+
+SOC_HOME="$1"
+LOG_FILE="/tmp/anomaly_detection.log"
+
+# Redirect all output to log file
+exec >> ${LOG_FILE} 2>&1
+
+echo "[$(date)] Wrapper script started"
+echo "[$(date)] SOC_HOME=${SOC_HOME}"
+echo "[$(date)] PWD=$(pwd)"
+echo "[$(date)] Checking if executable exists: ${SOC_HOME}/anomaly_detection"
+ls -la ${SOC_HOME}/anomaly_detection
+
+while true; do
+    echo "[$(date)] Starting anomaly_detection..."
+    echo "[$(date)] Command: ${SOC_HOME}/anomaly_detection"
+    ${SOC_HOME}/anomaly_detection
+    EXIT_CODE=$?
+    
+    echo "[$(date)] anomaly_detection exited with code ${EXIT_CODE}"
+    
+    if [ $EXIT_CODE -eq 42 ]; then
+        echo "[$(date)] Config change detected (exit code 42), restarting in 2 seconds..."
+        sleep 2
+    else
+        echo "[$(date)] anomaly_detection exited with code $EXIT_CODE, stopping."
+        break
+    fi
+done
+echo "[$(date)] Wrapper script exiting"
+WRAPPER_EOF
+        chmod +x /tmp/anomaly_detection_wrapper.sh
+        
+        echo "DEBUG: Wrapper script created, output will be logged to /tmp/anomaly_detection.log"
+        echo "DEBUG: Full command: start-stop-daemon --start --background --make-pidfile --pidfile ${PIDFILE} --exec /tmp/anomaly_detection_wrapper.sh -- ${SOC_HOME}"
+        start-stop-daemon --start --background --make-pidfile --pidfile ${PIDFILE} \
+                          --exec /tmp/anomaly_detection_wrapper.sh -- ${SOC_HOME}
+        
+        # Give it a moment to start
+        sleep 2
+        
+        # Check if process actually started
+        if [ -f "${PIDFILE}" ]; then
+            echo "DEBUG: PID file created: $(cat ${PIDFILE})"
+            if pgrep -f "anomaly_detection" >/dev/null 2>&1; then
+                echo "DEBUG: Process is running!"
+            else
+                echo "ERROR: Process failed to start! Check /tmp/anomaly_detection.log for errors"
+                echo "ERROR: Last 20 lines of log:"
+                tail -20 /tmp/anomaly_detection.log 2>/dev/null || echo "  (log file not found)"
+            fi
+        else
+            echo "ERROR: PID file not created!"
+        fi
+    else
+        # Run directly in foreground with auto-restart on config change
+        echo "DEBUG: Running in foreground with auto-restart support"
+        echo "DEBUG: Executable: ${SOC_HOME}/anomaly_detection"
+        echo "DEBUG: Full command: ${SOC_HOME}/anomaly_detection"
+        
+        # Auto-restart loop for foreground mode
+        while true; do
+            ${SOC_HOME}/anomaly_detection
+            EXIT_CODE=$?
+            
+            if [ $EXIT_CODE -eq 42 ]; then
+                echo "[$(date)] Config change detected (exit code 42), restarting in 2 seconds..."
+                sleep 2
+            else
+                echo "[$(date)] anomaly_detection exited with code $EXIT_CODE"
+                break
+            fi
+        done
+    fi
+}
+
+run_stream_server() {
+    # Default to running in foreground
+    echo "run_stream_server called with background=$1"
+    local background=$1
+    local port=$2
+    echo "run_stream_server called with port=${port}"
+    
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    
+    if [ "$background" = "true" ]; then
+        # Run as a daemon in the background
+        echo "start-stop daemon =${SOC_HOME}/image-stream-server"
+        start-stop-daemon --start --background --make-pidfile --pidfile ${STREAM_SERVER_PIDFILE} \
+                          --exec ${SOC_HOME}/image-stream-server -- -port ${port}
+    else
+        # Run directly in foreground
+        ${SOC_HOME}/image-stream-server -port ${port}
+    fi
+}
+
+run_mqtt_broker() {
+    echo "run_mqtt_broker called with background=$1"
+    local background=$1
+    local port=${2:-1883}  # Default MQTT port
+    echo "run_mqtt_broker called with port=${port}"
+    
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    
+    # Create minimal mosquitto config if it doesn't exist
+    local mqtt_conf="/tmp/mosquitto_${port}.conf"
+    cat > ${mqtt_conf} <<EOF
+# Minimal mosquitto configuration for extension
+listener ${port} 0.0.0.0
+allow_anonymous true
+persistence false
+log_dest stdout
+log_type error
+log_type warning
+EOF
+    
+    if [ "$background" = "true" ]; then
+        # Run as a daemon in the background
+        echo "Starting MQTT broker on port ${port}"
+        start-stop-daemon --start --background --make-pidfile --pidfile ${MQTT_BROKER_PIDFILE} \
+                          --exec ${SOC_HOME}/bin/mosquitto -- -c ${mqtt_conf}
+    else
+        # Run directly in foreground
+        ${SOC_HOME}/bin/mosquitto -c ${mqtt_conf}
+    fi
+}
+
+setup_gstreamer_env() {
+    echo "Setting up GStreamer environment for SOC: $SOC_NAME"
+    
+    # CRITICAL: Bundled plugins MUST come FIRST
+    # ext-bundle includes RTSP plugins + libgstcoreelements.so (queue)
+    # All plugins are from same GStreamer version for compatibility
+    export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_anomaly/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
+    export GST_PLUGIN_SYSTEM_PATH=$GST_PLUGIN_PATH
+    
+    # Include MQTT bin directory first so mosquitto utilities find their libraries
+    # Also include bin directory for all other shared libraries
+    export LD_LIBRARY_PATH=/var/volatile/bsext/ext_npu_anomaly/$SOC_NAME/bin:/var/volatile/bsext/ext_npu_anomaly/$SOC_NAME/lib:/usr/lib:$LD_LIBRARY_PATH
+    export GST_REGISTRY="/tmp/gst-registry.bin"
+    export GST_PLUGIN_SCANNER="/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+    export GST_REGISTRY_REUSE_PLUGIN_SCANNER=1
+    export GST_DEBUG_NO_COLOR=1
+    
+    # Force GStreamer to rescan plugins by clearing old registry
+    rm -f /tmp/gst-registry.bin
+    echo "  Cleared GStreamer registry - will rescan plugins on startup"
+    echo "  GST_PLUGIN_PATH=$GST_PLUGIN_PATH"
+    echo "  GST_PLUGIN_SYSTEM_PATH=$GST_PLUGIN_SYSTEM_PATH"
+    echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+    echo "  GST_REGISTRY=$GST_REGISTRY"
+    echo "  GST_PLUGIN_SCANNER=$GST_PLUGIN_SCANNER"
+    echo "  GST_REGISTRY_REUSE_PLUGIN_SCANNER=$GST_REGISTRY_REUSE_PLUGIN_SCANNER"
+    echo "  MQTT utilities available in: /var/volatile/bsext/ext_npu_anomaly/$SOC_NAME/bin/"
+}
+
+do_start() {
+    # check registry for auto-start
+    reg_disable_auto_start=$(registry extension ${DAEMON_NAME}-disable-auto-start)
+    if [ -n "${reg_disable_auto_start}" ]; then
+        DISABLE_AUTO_START=${reg_disable_auto_start}
+    fi
+
+    if [ "${DISABLE_AUTO_START}" = "true" ]; then
+        echo "Auto-start is disabled for ${DAEMON_NAME}"
+        return
+    fi
+
+    # CRITICAL: Kill any existing processes before starting new ones
+    # This prevents orphaned processes and stale PID files
+    echo "Checking for existing processes before starting..."
+    if pgrep -f "anomaly_detection" >/dev/null 2>&1; then
+        echo "  Found existing anomaly_detection process, killing it..."
+        pkill -9 -f "anomaly_detection" 2>/dev/null || true
+        sleep 1
+    fi
+    if pgrep -f "image-stream-server" >/dev/null 2>&1; then
+        echo "  Found existing image-stream-server process, killing it..."
+        pkill -9 -f "image-stream-server" 2>/dev/null || true
+        sleep 1
+    fi
+    if pgrep -f "mosquitto.*bsext" >/dev/null 2>&1; then
+        echo "  Found existing mosquitto process, killing it..."
+        pkill -9 -f "mosquitto.*bsext" 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Clean up stale PID files
+    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} 2>/dev/null || true
+
+    SOC_NAME=$(get_soc_name)
+    setup_gstreamer_env
+
+    # Start MQTT broker first (so it's ready when attention_demo starts)
+    MQTT_PORT=1883  # default MQTT port
+    reg_mqtt_port=$(registry networking bs-mqtt-broker-port)
+    if [ -n "${reg_mqtt_port}" ] && [ "${reg_mqtt_port}" != "0" ]; then
+        MQTT_PORT=${reg_mqtt_port}
+    fi
+    
+    if [ "${MQTT_PORT}" != "0" ]; then
+        echo "Starting MQTT broker on port ${MQTT_PORT}"
+        run_mqtt_broker true ${MQTT_PORT}
+    else
+        echo "MQTT broker is disabled (port set to 0)"
+    fi
+
+    # Start the anomaly_detection process as a daemon
+    run_anomaly_detection true
+
+    STREAM_SERVER_PORT=20200  # default port for image stream server
+    reg_stream_server_port=$(registry networking bs-image-stream-server-port)
+    echo "Starting image stream server on port ${reg_stream_server_port}"
+    if [ -n "${reg_stream_server_port}" ]; then
+        STREAM_SERVER_PORT=${reg_stream_server_port}
+    fi
+
+    if [ "${STREAM_SERVER_PORT}" = "0" ]; then
+        echo "Image stream server is disabled (port set to 0)"
+        return
+    fi
+
+    # Start the image stream server process as a daemon
+    run_stream_server true ${STREAM_SERVER_PORT}
+}
+
+do_stop() {
+    echo "Stopping ${DAEMON_NAME} services..."
+    
+    # Stop anomaly_detection (try current name, then legacy name)
+    local stopped_demo=false
+    if [ -f "${PIDFILE}" ]; then
+        echo "Stopping anomaly_detection (PID file: ${PIDFILE})"
+        local pid=$(cat ${PIDFILE} 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "Killing process $pid with SIGKILL..."
+            kill -9 $pid 2>/dev/null || true
+            # Also kill any child processes
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f ${PIDFILE}
+        stopped_demo=true
+    fi
+    
+    # Also check for legacy bsext-anomaly.pid
+    if [ -f "/var/run/bsext-anomaly.pid" ]; then
+        echo "Stopping anomaly_detection (legacy PID file: /var/run/bsext-anomaly.pid)"
+        local pid=$(cat /var/run/bsext-anomaly.pid 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "Killing process $pid with SIGKILL..."
+            kill -9 $pid 2>/dev/null || true
+            # Also kill any child processes
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f /var/run/bsext-anomaly.pid
+        stopped_demo=true
+    fi
+    
+    if [ "$stopped_demo" = "false" ]; then
+        echo "No PID file found for anomaly_detection, trying to kill by name..."
+        pkill -9 -f "anomaly_detection" || true
+    fi
+    
+    # Give it a moment and verify it's actually stopped
+    sleep 1
+    if pgrep -f "anomaly_detection" >/dev/null 2>&1; then
+        echo "WARNING: anomaly_detection still running, forcing kill by name..."
+        pkill -9 -f "anomaly_detection" || true
+        sleep 1
+    fi
+
+    # Stop image-stream-server (ALWAYS kill by name to handle all instances)
+    echo "Stopping image-stream-server..."
+    
+    # Kill ALL image-stream-server processes by name (handles truncated names in ps)
+    # Use multiple patterns to catch truncated process names
+    echo "  Searching for image-stream-server processes..."
+    pkill -9 -f "image-stream-se" 2>/dev/null || true
+    pkill -9 -f "image-stream-server" 2>/dev/null || true
+    killall -9 image-stream-server 2>/dev/null || true
+    
+    # Also try PID file if it exists (for cleanup)
+    if [ -f "${STREAM_SERVER_PIDFILE}" ]; then
+        local pid=$(cat ${STREAM_SERVER_PIDFILE} 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "  Also killing PID $pid from PID file..."
+            kill -9 $pid 2>/dev/null || true
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f ${STREAM_SERVER_PIDFILE}
+    fi
+    
+    # Give processes time to die
+    sleep 1
+    
+    # Verify image-stream-server is stopped (check for truncated name too)
+    if ps | grep -E "image-stream|image-stream-se" | grep -v grep >/dev/null 2>&1; then
+        echo "  WARNING: image-stream-server still running! Showing processes:"
+        ps | grep -E "image-stream|image-stream-se" | grep -v grep
+        echo "  Forcing final kill..."
+        ps | grep -E "image-stream|image-stream-se" | grep -v grep | awk '{print $1}' | xargs -r kill -9 2>/dev/null || true
+        sleep 1
+        if ps | grep -E "image-stream|image-stream-se" | grep -v grep >/dev/null 2>&1; then
+            echo "  ERROR: Failed to stop image-stream-server after multiple attempts!"
+        else
+            echo "  image-stream-server stopped successfully (after forced kill)"
+        fi
+    else
+        echo "  image-stream-server stopped successfully"
+    fi
+
+    # Stop mosquitto broker
+    if [ -f "${MQTT_BROKER_PIDFILE}" ]; then
+        echo "Stopping mosquitto broker (PID file: ${MQTT_BROKER_PIDFILE})"
+        local pid=$(cat ${MQTT_BROKER_PIDFILE} 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "Killing process $pid with SIGKILL..."
+            kill -9 $pid 2>/dev/null || true
+            # Also kill any child processes
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f ${MQTT_BROKER_PIDFILE}
+    else
+        echo "No PID file found for mosquitto, trying to kill by name..."
+        pkill -9 -f "mosquitto" || true
+    fi
+    
+    # Verify mosquitto is stopped
+    sleep 1
+    if pgrep -f "mosquitto" >/dev/null 2>&1; then
+        echo "WARNING: mosquitto still running, forcing kill by name..."
+        pkill -9 -f "mosquitto" || true
+        sleep 1
+    fi
+    
+    echo "Stop complete"
+}
+
+# Parse command line arguments first (they take priority over config file)
+ACTION=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --rtsp-url)
+            RTSP_HINT="$2"
+            shift 2
+            ;;
+        --rtsp-server)
+            RTSP_HINT="$2"
+            shift 2
+            ;;
+        start|stop|restart|run|detect)
+            ACTION="$1"
+            shift
+            ;;
+        *)
+            if [ -z "$ACTION" ]; then
+                ACTION="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Default to help if no action specified
+if [ -z "$ACTION" ]; then
+    ACTION="help"
+fi
+
+case "$ACTION" in
+    start)
+        echo "Starting ${DAEMON_NAME}"
+        do_start
+        ;;
+    stop)
+        echo "Stopping ${DAEMON_NAME}"
+        do_stop
+        ;;
+    restart)
+        echo "Restarting ${DAEMON_NAME}"
+        do_stop
+        do_start
+        ;;
+    run)
+        echo "Running ${DAEMON_NAME} in foreground"
+        # Run directly in foreground (not as daemon)
+        run_anomaly_detection false
+        run_stream_server false 20200
+        ;;
+    detect)
+        echo "Detecting available video sources..."
+        SOURCES=$(detect_video_sources)
+        if [ -n "$SOURCES" ] && [ "$SOURCES" != " " ]; then
+            echo ""
+            echo "Found video sources:"
+            # Parse sources properly (space-separated)
+            for source in $SOURCES; do
+                if [ -n "$source" ]; then
+                    echo "  - $source"
+                fi
+            done
+            echo ""
+            echo "The system will automatically select the best source:"
+            SELECTED=$(get_video_source)
+            echo "  Selected: $SELECTED"
+        else
+            echo "No video sources detected."
+            
+        fi
+        ;;
+    help|*)
+        echo "Usage: $0 {start|stop|restart|run|detect} [options]"
+        echo ""
+        echo "Actions:"
+        echo "  start     Start the anomaly detection service as a daemon"
+        echo "  stop      Stop the anomaly detection service"
+        echo "  restart   Restart the anomaly detection service"
+        echo "  run       Run the anomaly detection service in foreground"
+        echo "  detect    Detect available video sources"
+        echo ""
+        echo "Options (for manual use):"
+        echo "  --rtsp-url URL      Full RTSP URL (e.g., rtsp://192.168.0.203:8554/mystream)"
+        echo "  --rtsp-server HOST  RTSP server IP:port (e.g., 192.168.0.203:8554)"
+        echo ""
+        echo "Configuration via BrightSign registry:"
+        echo "  bsext-anomaly-video-device      Video device path (e.g., /dev/video0, /dev/video1)"
+        echo "                                   If not set, auto-detection will find available cameras"
+        echo "                                   Priority: USB cameras (/dev/video1+) > HDMI/default (/dev/video0)"
+        echo "  bsext-anomaly-rtsp-server       RTSP server IP:port (e.g., 192.168.0.203:8554)"
+        echo "  bsext-anomaly-disable-auto-start  Disable automatic startup (true/false)"
+        echo ""
+        echo "MQTT Utilities:"
+        echo "  The environment is configured with LD_LIBRARY_PATH for MQTT utilities."
+        echo "  You can run MQTT commands from any directory:"
+        echo ""
+        echo "  mosquitto_sub -h 127.0.0.1 -p 1883 -t 'bs/anomaly/analytics' -v"
+        echo "  mosquitto_pub -h 127.0.0.1 -p 1883 -t 'test/topic' -m 'message'"
+        echo "  /var/volatile/bsext/ext_npu_anomaly/RK3588/bin/mosquitto -v"
+        echo ""
+        echo "Examples:"
+        echo "  # For automatic detection (no configuration needed):"
+        echo "  $0 start    # Will auto-detect USB camera or HDMI input"
+        echo ""
+        echo "  # To explicitly set a video device:"
+        echo "  registry write extension bsext-anomaly-video-device /dev/video1"
+        echo ""
+        echo "  # For RTSP streams:"
+        echo "  registry write extension bsext-anomaly-rtsp-server 192.168.0.203:8554"
+        echo "  registry write extension bsext-anomaly-video-device rtsp://192.168.0.203:8554/mystream"
+        echo ""
+        echo "  # To view current settings:"
+        echo "  registry read extension bsext-anomaly-rtsp-server"
+        echo "  registry read extension bsext-anomaly-video-device"
+        echo ""
+        echo "  # To clear registry and use auto-detection:"
+        echo "  registry delete extension bsext-anomaly-video-device"
+        exit 1
+        ;;
+esac
+
+exit 0
