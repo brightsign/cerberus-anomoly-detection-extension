@@ -83,7 +83,8 @@ set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
 
 # rknn api
 set(LIB_ARCH aarch64)
-set(RKNN_RT_LIB ${CMAKE_SOURCE_DIR}/include/librknnrt.so)
+set(RKNN_API_PATH ${CMAKE_SOURCE_DIR}/toolkit/rknn-toolkit2/rknpu2/runtime/Linux/librknn_api)
+set(RKNN_RT_LIB ${RKNN_API_PATH}/aarch64/librknnrt.so)
 
 #rga -- the 3588 rga lib is okay 3576
 # set(RGA_PATH ${CMAKE_SOURCE_DIR}/include/3rdparty/rga/RK3588)
@@ -95,7 +96,7 @@ set(RGA_LIB ${OECORE_TARGET_SYSROOT}/usr/lib/librga.so)
 # set(TURBOJPEG_LIB ${TURBOJPEG_PATH}/libturbojpeg.a)
 
 
-# include_directories(${RKNN_API_PATH}/include)
+include_directories(${RKNN_API_PATH}/include)
 include_directories(${CMAKE_SOURCE_DIR}/include/3rdparty)
 include_directories(${RGA_PATH}/include)
 
@@ -162,20 +163,66 @@ include_directories( ${CMAKE_SOURCE_DIR}/include)
 # Enable MQTT publisher support
 add_definitions(-DHAVE_MOSQUITTO=1)
 
-# TODO: Add source files for anomaly detection
-# Placeholder executable - update with actual source files
-add_executable(anomaly_detection
-        src/main.cpp
+# ============================================================================
+# Video Wall Monitor - Multi-threaded NPU-accelerated anomaly detection
+# Single unified executable for video wall monitoring
+# ============================================================================
+# Build options
+option(WVM_USE_RGA "Enable RGA hardware acceleration for preprocessing" ON)
+option(WVM_USE_MOSQUITTO "Enable MQTT publishing via libmosquitto" ON)
+
+# Collect all sources
+set(ANOMALY_SOURCES
+  src/main.cpp
+  src/wvm/config.cpp
+  src/wvm/logger.cpp
+  src/wvm/v4l2_capture.cpp
+  src/wvm/roi.cpp
+  src/wvm/rga_preproc.cpp
+  src/wvm/rknn_mobilenet.cpp
+  src/wvm/reference_db.cpp
+  src/wvm/matcher.cpp
+  src/wvm/anomaly.cpp
+  src/wvm/mqtt.cpp
+  src/wvm/pipeline.cpp
 )
 
+# Add headers to include path
+include_directories(${CMAKE_SOURCE_DIR}/include/wvm)
+
+# Create anomaly_detection executable
+add_executable(anomaly_detection ${ANOMALY_SOURCES})
+
+# Link libraries
 target_link_libraries(anomaly_detection
   ${RKNN_RT_LIB}
-  ${OpenCV_LIBS}
-  ${RGA_LIB}
-  ${TURBOJPEG_LIB}
-  ${MY_LIBS}
-  mosquitto
+  pthread
 )
+
+# Conditionally link RGA
+if(WVM_USE_RGA)
+  target_compile_definitions(anomaly_detection PRIVATE USE_RGA=1)
+  target_link_libraries(anomaly_detection ${RGA_LIB})
+  message(STATUS "anomaly_detection: RGA hardware acceleration ENABLED")
+else()
+  message(STATUS "anomaly_detection: RGA hardware acceleration DISABLED")
+endif()
+
+# Conditionally link mosquitto
+if(WVM_USE_MOSQUITTO)
+  target_compile_definitions(anomaly_detection PRIVATE USE_MOSQUITTO=1)
+  target_link_libraries(anomaly_detection mosquitto)
+  message(STATUS "anomaly_detection: MQTT publishing ENABLED")
+else()
+  message(STATUS "anomaly_detection: MQTT publishing DISABLED (stub only)")
+endif()
+
+# Install executable
+install(TARGETS anomaly_detection DESTINATION bin)
+
+# Install videowall config to config/ directory (not etc/)
+# The application expects config/videowall.json as the default path
+install(FILES config/videowall.json DESTINATION config)
 
 # Convert TARGET_SOC to uppercase for SOC_DIR
 string(TOUPPER ${TARGET_SOC} SOC_DIR)
@@ -271,6 +318,26 @@ add_custom_target(image_stream_server ALL
   VERBATIM
 )
 
+# Copy embedding models from toolkit to install directory
+# Only copy if the model file exists for this SOC
+set(MODEL_SOURCE ${CMAKE_SOURCE_DIR}/toolkit/mobilenetv2-embedding-${TARGET_SOC}.rknn)
+set(MODEL_DEST ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model/mobilenetv2-embedding-${TARGET_SOC}.rknn)
+
+if(EXISTS ${MODEL_SOURCE})
+  add_custom_target(copy_models ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MODEL_SOURCE} ${MODEL_DEST}
+    COMMENT "Copying MobileNetV2 embedding model for ${TARGET_SOC}"
+    VERBATIM
+  )
+else()
+  message(WARNING "Model file not found: ${MODEL_SOURCE} - skipping model copy for ${TARGET_SOC}")
+  add_custom_target(copy_models ALL
+    COMMAND ${CMAKE_COMMAND} -E echo "Model file not available for ${TARGET_SOC}, skipping..."
+    COMMENT "Model file not available for ${TARGET_SOC}"
+  )
+endif()
+
 # Copy shared libs and models. Copy the Go binary only if it exists.
 add_custom_command(TARGET anomaly_detection POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy ${RKNN_RT_LIB} $<TARGET_FILE_DIR:anomaly_detection>
@@ -285,6 +352,7 @@ if(TARGET mosquitto_broker)
   add_dependencies(anomaly_detection mosquitto_broker)
 endif()
 add_dependencies(anomaly_detection image_stream_server)
+add_dependencies(anomaly_detection copy_models)
 
 # install target and libraries
 set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/${SOC_DIR})
@@ -297,13 +365,6 @@ install(FILES ${CMAKE_BINARY_DIR}/image-stream-server
                    GROUP_READ GROUP_EXECUTE
                    WORLD_READ WORLD_EXECUTE
         OPTIONAL)
-
-# Install config.json to the install directory
-install(FILES ${CMAKE_SOURCE_DIR}/configs/config.json
-        DESTINATION ./configs
-        PERMISSIONS OWNER_READ OWNER_WRITE
-                   GROUP_READ
-                   WORLD_READ)
 
 # Use FILE(COPY) which preserves the actual files rather than symlinks
 install(CODE "
