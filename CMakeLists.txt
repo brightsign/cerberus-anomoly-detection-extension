@@ -183,6 +183,7 @@ set(ANOMALY_SOURCES
   src/wvm/reference_db.cpp
   src/wvm/matcher.cpp
   src/wvm/anomaly.cpp
+  src/wvm/basic_anomaly.cpp
   src/wvm/mqtt.cpp
   src/wvm/pipeline.cpp
 )
@@ -201,7 +202,7 @@ target_link_libraries(anomaly_detection
 
 # Conditionally link RGA
 if(WVM_USE_RGA)
-  target_compile_definitions(anomaly_detection PRIVATE USE_RGA=1)
+  target_compile_definitions(anomaly_detection PRIVATE WVM_USE_RGA=1)
   target_link_libraries(anomaly_detection ${RGA_LIB})
   message(STATUS "anomaly_detection: RGA hardware acceleration ENABLED")
 else()
@@ -210,7 +211,7 @@ endif()
 
 # Conditionally link mosquitto
 if(WVM_USE_MOSQUITTO)
-  target_compile_definitions(anomaly_detection PRIVATE USE_MOSQUITTO=1)
+  target_compile_definitions(anomaly_detection PRIVATE WVM_USE_MOSQUITTO=1)
   target_link_libraries(anomaly_detection mosquitto)
   message(STATUS "anomaly_detection: MQTT publishing ENABLED")
 else()
