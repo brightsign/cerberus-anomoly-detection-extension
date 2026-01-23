@@ -259,19 +259,84 @@ LOG_FILE="/tmp/anomaly_detection.log"
 # Redirect all output to log file
 exec >> ${LOG_FILE} 2>&1
 
+echo "[$(date)] ========================================"
 echo "[$(date)] Wrapper script started"
 echo "[$(date)] SOC_HOME=${SOC_HOME}"
 echo "[$(date)] PWD=$(pwd)"
+echo "[$(date)] ========================================"
+echo "[$(date)] Environment check:"
+echo "[$(date)]   LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
+echo "[$(date)]   GST_PLUGIN_PATH=${GST_PLUGIN_PATH}"
+echo "[$(date)] ========================================"
 echo "[$(date)] Checking if executable exists: ${SOC_HOME}/anomaly_detection"
 ls -la ${SOC_HOME}/anomaly_detection
+echo "[$(date)] Checking model file:"
+ls -la ${SOC_HOME}/model/*.rknn 2>&1 || echo "  No model files found"
+echo "[$(date)] Checking config file:"
+ls -la ${SOC_HOME}/config/videowall.json 2>&1 || echo "  No config file found"
+echo "[$(date)] ========================================"
+
+# Function to monitor process and detect hangs
+monitor_process() {
+    local pid=$1
+    local timeout=10  # 10 seconds timeout for startup
+    local count=0
+    
+    while [ $count -lt $timeout ]; do
+        if ! kill -0 $pid 2>/dev/null; then
+            echo "[$(date)] Process $pid has exited"
+            return 1
+        fi
+        
+        # Check if process is actually running (not zombie)
+        local state=$(cat /proc/$pid/stat 2>/dev/null | awk '{print $3}')
+        if [ "$state" = "Z" ]; then
+            echo "[$(date)] Process $pid is a zombie!"
+            return 1
+        fi
+        
+        sleep 1
+        count=$((count + 1))
+    done
+    
+    echo "[$(date)] Process $pid still running after ${timeout}s - looks healthy"
+    return 0
+}
 
 while true; do
+    echo "[$(date)] ========================================"
     echo "[$(date)] Starting anomaly_detection..."
     echo "[$(date)] Command: ${SOC_HOME}/anomaly_detection"
-    ${SOC_HOME}/anomaly_detection
+    echo "[$(date)] ========================================"
+    
+    # Start the process in background so we can monitor it
+    ${SOC_HOME}/anomaly_detection &
+    PID=$!
+    
+    echo "[$(date)] Process started with PID: ${PID}"
+    echo "[$(date)] Monitoring for 10 seconds..."
+    
+    # Wait for the process to finish or timeout
+    wait $PID 2>/dev/null
     EXIT_CODE=$?
     
+    echo "[$(date)] ========================================"
     echo "[$(date)] anomaly_detection exited with code ${EXIT_CODE}"
+    
+    # Check for common exit codes
+    if [ $EXIT_CODE -eq 139 ]; then
+        echo "[$(date)] ERROR: Segmentation fault (exit code 139)!"
+        echo "[$(date)] This usually indicates a null pointer dereference or memory corruption."
+    elif [ $EXIT_CODE -eq 134 ]; then
+        echo "[$(date)] ERROR: Aborted (exit code 134)!"
+        echo "[$(date)] This usually indicates an assertion failure or abort() call."
+    elif [ $EXIT_CODE -eq 127 ]; then
+        echo "[$(date)] ERROR: Command not found or library missing (exit code 127)!"
+    elif [ $EXIT_CODE -eq 1 ]; then
+        echo "[$(date)] ERROR: General error (exit code 1)"
+    fi
+    
+    echo "[$(date)] ========================================"
     
     if [ $EXIT_CODE -eq 42 ]; then
         echo "[$(date)] Config change detected (exit code 42), restarting in 2 seconds..."

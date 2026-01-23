@@ -1,0 +1,56 @@
+{
+  "device": {
+    "camera_device": "/dev/video1",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "pixel_format": "YUYV"
+  },
+  "model": {
+    "rknn_path": "model/mobilenetv2-embedding-rk3588.rknn",
+    "input_w": 224,
+    "input_h": 224,
+    "embedding_dim": 1280
+  },
+  "reference": {
+    "enabled": false,
+    "ref_fps": 5,
+    "embeddings_path": "/storage/sd/references/my_asset/ref_embeddings.f32",
+    "index_path": "/storage/sd/references/my_asset/ref_index.json",
+    "search_window_seconds": 2.0
+  },
+  "roi": {
+    "mode": "rect",
+    "tvs": [
+      { "id": "camera", "x": 0, "y": 0, "w": 1280, "h": 720 }
+    ]
+  },
+  "anomaly": {
+    "enabled": true,
+    "sample_fps": 5,
+    "black_luma_mean": 130.0,
+    "black_luma_var": 500.0,
+    "persist_black_ms": 2000,
+    "persist_freeze_ms": 2000,
+    "persist_mismatch_ms": 2500,
+    "lag_threshold_s": 1.5,
+    "stutter_window_ms": 3000,
+    "similarity_min": 0.75,
+    "freeze_similarity": 0.9800,
+    "camera_timeout_ms": 1500,
+    "peer_enabled": false,
+    "peer_similarity_min": 0.85,
+    "persist_outlier_ms": 2500
+  },
+  "mqtt": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 1883,
+    "topic": "videowall/events",
+    "client_id": "xt5-wall-monitor"
+  },
+  "logging": {
+    "level": "INFO",
+    "path": "/tmp/videowall-monitor.log"
+  }
+}
