@@ -2,7 +2,6 @@
 #include "wvm/types.hpp"
 #include "wvm/config.hpp"
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace wvm {
@@ -30,7 +29,6 @@ public:
 private:
   struct TvState {
     uint64_t last_ts = 0;
-    uint64_t last_metrics_log = 0;  // Per-TV metrics logging timestamp
 
     // BLACK detection with hysteresis
     uint64_t black_since = 0;
@@ -49,9 +47,6 @@ private:
 
   AnomalyConfig cfg_;
   std::unordered_map<std::string, TvState> st_;
-
-  // Fast lookup for basic-mode FREEZE suppression per tv.
-  std::unordered_set<std::string> freeze_ignore_;
 
   // Utility functions
   static void l2_normalize_inplace(std::vector<float>& v);
