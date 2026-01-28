@@ -588,6 +588,17 @@ do_stop() {
         echo "WARNING: anomaly_detection still running, forcing kill by name..."
         pkill -9 -f "anomaly_detection" || true
         sleep 1
+        
+        # Final verification - kill any remaining processes matching anomaly_detect pattern
+        if pgrep -f "anomaly_detect" >/dev/null 2>&1; then
+            echo "WARNING: Still found anomaly_detect processes, killing all matches..."
+            pkill -9 -f "anomaly_detect" || true
+            sleep 0.5
+            
+            # Last resort: kill by exact binary path
+            pkill -9 -f "/var/volatile/bsext/ext_npu_anomaly" || true
+            pkill -9 -f "${SCRIPT_PATH}" || true
+        fi
     fi
 
     # Stop image-stream-server (ALWAYS kill by name to handle all instances)
@@ -652,6 +663,37 @@ do_stop() {
         echo "WARNING: mosquitto still running, forcing kill by name..."
         pkill -9 -f "mosquitto" || true
         sleep 1
+    fi
+    
+    # FINAL COMPREHENSIVE CLEANUP - catch any remaining anomaly detection processes
+    echo "Final cleanup check..."
+    local remaining_procs=0
+    
+    # Check for any remaining anomaly_detect processes (catches truncated names too)
+    if ps | grep -E "anomaly_detect" | grep -v grep | grep -v bsext_init >/dev/null 2>&1; then
+        echo "WARNING: Found remaining anomaly detection processes:"
+        ps | grep -E "anomaly_detect" | grep -v grep | grep -v bsext_init
+        echo "Killing all remaining anomaly detection processes..."
+        ps | grep -E "anomaly_detect" | grep -v grep | grep -v bsext_init | awk '{print $1}' | xargs -r kill -9 2>/dev/null || true
+        remaining_procs=1
+    fi
+    
+    # Double-check with pgrep as well
+    if pgrep -f "anomaly_detection" >/dev/null 2>&1; then
+        echo "WARNING: pgrep still finds anomaly_detection processes, force killing..."
+        pkill -9 -f "anomaly_detection" || true
+        remaining_procs=1
+    fi
+    
+    # Final wait if we had to do extra cleanup
+    if [ "$remaining_procs" -eq 1 ]; then
+        sleep 1
+        if ps | grep -E "anomaly_detect" | grep -v grep | grep -v bsext_init >/dev/null 2>&1; then
+            echo "ERROR: Unable to stop all anomaly detection processes!"
+            ps | grep -E "anomaly_detect" | grep -v grep | grep -v bsext_init
+        else
+            echo "All processes stopped successfully after extra cleanup"
+        fi
     fi
     
     echo "Stop complete"

@@ -39,8 +39,8 @@
     "enabled": true,
     "sample_fps": 5,
 
-    "black_enter_mean": 120.0,
-    "black_exit_mean": 140.0,
+    "black_enter_mean": 115.0,
+    "black_exit_mean": 135.0,
     "black_enter_var": 10000.0,
     "black_exit_var": 11000.0,
     "persist_black_ms": 500,

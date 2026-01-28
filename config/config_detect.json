@@ -1,0 +1,96 @@
+{
+  "_comment": "Configuration for DETECTING anomalies using recorded reference",
+  
+  "device": {
+    "camera_device": "/dev/video1",
+    "width": 1280,
+    "height": 720,
+    "fps": 10,
+    "pixel_format": "YUYV"
+  },
+  
+  "model": {
+    "rknn_path": "/opt/brightsign/mobilenetv2-1.0-224-feature.rknn",
+    "input_w": 224,
+    "input_h": 224,
+    "embedding_dim": 1280
+  },
+  
+  "reference": {
+    "enabled": true,
+    "mode": "detect",
+    "ref_fps": 5,
+    "embeddings_path": "/storage/sd/references/demo/ref_embeddings.f32",
+    "search_window_seconds": 2.0,
+    "coarse_stride_seconds": 1.0,
+    "reacquire_similarity": 0.75,
+    "_comment": "Matcher will search ±2s around predicted position, resync if sim<0.75"
+  },
+  
+  "roi": {
+    "mode": "rect",
+    "_comment": "Same ROIs as recording - adjust to your camera framing",
+    "tvs": [
+      { 
+        "id": "tv1", 
+        "x": 50, 
+        "y": 80, 
+        "w": 560, 
+        "h": 620,
+        "_comment": "Left monitor (playing reference video)"
+      },
+      { 
+        "id": "tv2", 
+        "x": 650, 
+        "y": 80, 
+        "w": 560, 
+        "h": 620,
+        "_comment": "Right monitor (playing video with freeze/black)"
+      }
+    ]
+  },
+  
+  "anomaly": {
+    "enabled": true,
+    "sample_fps": 5,
+    
+    "_comment_black": "BLACK detection with hysteresis to prevent flapping",
+    "black_enter_mean": 25.0,
+    "black_exit_mean": 40.0,
+    "black_enter_var": 200.0,
+    "black_exit_var": 500.0,
+    "persist_black_ms": 1500,
+    "persist_black_recover_ms": 1500,
+    
+    "_comment_freeze": "FREEZE when reference index stuck while wall advances",
+    "persist_freeze_ms": 2000,
+    "persist_freeze_recover_ms": 1000,
+    
+    "_comment_mismatch": "MISMATCH when similarity too low to reference",
+    "persist_mismatch_ms": 2500,
+    "similarity_min": 0.75,
+    
+    "_comment_other": "LAG and STUTTER detection parameters",
+    "lag_threshold_s": 1.5,
+    "stutter_window_ms": 3000,
+    
+    "_comment_basic": "Basic (reference-less) detection disabled - using reference-based",
+    "freeze_similarity": 0.9995,
+    "camera_timeout_ms": 5000,
+    "peer_enabled": false
+  },
+  
+  "mqtt": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 1883,
+    "topic": "videowall/events",
+    "client_id": "xt5-demo",
+    "_comment": "Events will include tv_id (tv1, tv2) to identify which monitor"
+  },
+  
+  "logging": {
+    "level": "INFO",
+    "path": "/tmp/videowall-monitor.log"
+  }
+}

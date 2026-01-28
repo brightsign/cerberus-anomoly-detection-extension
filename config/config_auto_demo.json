@@ -1,0 +1,118 @@
+{
+  "_comment": "Single-run Record + Detect configuration for BrightSign Extension Demo",
+  "_comment2": "This config enables AUTO mode: builds reference from tv1 while detecting anomalies on both monitors",
+  
+  "device": {
+    "camera_device": "/dev/video1",
+    "width": 1280,
+    "height": 720,
+    "fps": 10,
+    "pixel_format": "YUYV"
+  },
+  
+  "model": {
+    "rknn_path": "/opt/brightsign/mobilenetv2-1.0-224-feature.rknn",
+    "input_w": 224,
+    "input_h": 224,
+    "embedding_dim": 1280
+  },
+  
+  "reference": {
+    "enabled": true,
+    "mode": "auto",
+    "_comment_mode": "AUTO mode: builds reference online from tv1 while simultaneously detecting anomalies",
+    
+    "ref_fps": 5,
+    "_comment_ref_fps": "Should match anomaly.sample_fps for clean timeline advancement",
+    
+    "search_window_seconds": 4.0,
+    "_comment_search": "Matcher searches ±4s around predicted position for resync",
+    
+    "auto_source": "tv_id",
+    "_comment_auto_source": "tv_id = use specific monitor as reference (best for demos), consensus = medoid across all (best for 5-6 TVs)",
+    
+    "ref_tv_id": "tv1",
+    "_comment_ref_tv_id": "Which monitor provides the reference timeline (tv1 = left monitor with clean video)",
+    
+    "auto_min_ref_seconds": 3.0,
+    "_comment_warmup": "Wait 3 seconds before enabling FREEZE/LAG/MISMATCH detection (BLACK works immediately)",
+    
+    "auto_max_seconds": 600,
+    "_comment_max": "Keep max 10 minutes of reference in memory (ring buffer)",
+    
+    "auto_persist": true,
+    "auto_persist_path": "/storage/sd/references/demo_auto_reference.f32",
+    "_comment_persist": "Optionally save the generated reference to file for debugging/replay"
+  },
+  
+  "roi": {
+    "mode": "rect",
+    "_comment": "IMPORTANT: Adjust x,y,w,h coordinates to match your camera framing!",
+    "tvs": [
+      { 
+        "id": "tv1", 
+        "x": 50, 
+        "y": 80, 
+        "w": 560, 
+        "h": 620,
+        "_comment": "Left monitor - REFERENCE (clean video) - provides the reference timeline"
+      },
+      { 
+        "id": "tv2", 
+        "x": 650, 
+        "y": 80, 
+        "w": 560, 
+        "h": 620,
+        "_comment": "Right monitor - TEST (video with freeze/black) - compared against tv1"
+      }
+    ]
+  },
+  
+  "anomaly": {
+    "enabled": true,
+    "sample_fps": 5,
+    "_comment_sample": "Must match reference.ref_fps for proper timeline sync",
+    
+    "_comment_black": "BLACK detection (works immediately, no warmup)",
+    "black_enter_mean": 25.0,
+    "black_exit_mean": 40.0,
+    "black_enter_var": 200.0,
+    "black_exit_var": 500.0,
+    "persist_black_ms": 1500,
+    "persist_black_recover_ms": 1500,
+    
+    "_comment_freeze": "FREEZE detection (armed after 3s warmup)",
+    "persist_freeze_ms": 2000,
+    "persist_freeze_recover_ms": 1000,
+    "_comment_freeze_detail": "Detects when tv2 timeline stops advancing while tv1 continues",
+    
+    "_comment_mismatch": "MISMATCH detection (armed after 3s warmup)",
+    "persist_mismatch_ms": 2500,
+    "similarity_min": 0.75,
+    "_comment_mismatch_detail": "Detects when tv2 content differs significantly from reference",
+    
+    "_comment_lag": "LAG detection (armed after 3s warmup)",
+    "lag_threshold_s": 1.5,
+    "_comment_lag_detail": "Detects when tv2 is more than 1.5s behind the reference timeline",
+    
+    "_comment_stutter": "STUTTER detection (armed after 3s warmup)",
+    "stutter_window_ms": 3000,
+    "_comment_stutter_detail": "Detects timeline jumps/jitter",
+    
+    "camera_timeout_ms": 5000
+  },
+  
+  "mqtt": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 1883,
+    "topic": "videowall/events",
+    "client_id": "xt5-demo-auto",
+    "_comment": "Events tagged with tv_id (tv1 or tv2) to identify which monitor has the anomaly"
+  },
+  
+  "logging": {
+    "level": "INFO",
+    "path": "/tmp/videowall-monitor.log"
+  }
+}
