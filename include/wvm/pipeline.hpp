@@ -72,6 +72,9 @@ private:
   void inference_loop();
   void analysis_loop();
   void mqtt_loop();
+  
+  // Frame streaming helper
+  void save_frame_composite(const CapturedFrame& f);
 };
 
 } // namespace wvm

@@ -2,9 +2,11 @@
 #include "wvm/v4l2_capture.hpp"
 #include "wvm/logger.hpp"
 #include <chrono>
+#include <turbojpeg.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 
 namespace wvm {
@@ -144,6 +146,9 @@ void Pipeline::capture_loop() {
         mqtt_q_.push(std::move(e));
         Logger::instance().log(LogLevel::INFO, "Camera online");
       }
+      
+      // Save side-by-side composite frame for streaming (every frame at full 10fps)
+      save_frame_composite(f);
       
       if (!frame_q_.push(std::move(f))) {
         Logger::instance().log(LogLevel::WARN, "Capture loop: Frame queue full, exiting");
@@ -417,6 +422,111 @@ void Pipeline::mqtt_loop() {
     if (!oe) break;
     mqtt_.publish(*oe);
   }
+}
+
+void Pipeline::save_frame_composite(const CapturedFrame& f) {
+  static int frame_save_count = 0;
+  frame_save_count++;
+  
+  // Log first frame and every 50 frames
+  if (frame_save_count == 1) {
+    Logger::instance().log(LogLevel::INFO, "Frame streaming: First composite frame saved to /tmp/output.jpg");
+  } else if (frame_save_count % 50 == 0) {
+    Logger::instance().log(LogLevel::INFO, "Frame streaming: %d composite frames saved (latest: /tmp/output.jpg)", frame_save_count);
+  }
+
+  // Get tv1 and tv2 ROIs from config
+  if (cfg_.roi.tvs.size() < 2) {
+    Logger::instance().log(LogLevel::WARN, "Frame streaming: Need at least 2 ROIs for composite, found %zu", cfg_.roi.tvs.size());
+    return;
+  }
+  
+  const auto& tv1_roi = cfg_.roi.tvs[0]; // First ROI (tv1)
+  const auto& tv2_roi = cfg_.roi.tvs[1]; // Second ROI (tv2)
+  
+  const int roi_w = tv1_roi.w;
+  const int roi_h = tv1_roi.h;
+  const int composite_w = roi_w * 2; // Side by side
+  const int composite_h = roi_h;
+  
+  // Convert YUYV to RGB for both ROIs
+  std::vector<uint8_t> rgb_composite(composite_w * composite_h * 3);
+  
+  // Lambda to convert YUYV ROI to RGB (ITU-R BT.601)
+  auto yuyv_roi_to_rgb = [&](const RoiRect& roi, uint8_t* rgb_out, int dest_stride) {
+    const int src_stride = f.width * 2; // YUYV is 2 bytes per pixel
+    
+    for (int y = 0; y < roi_h; ++y) {
+      const uint8_t* yuyv_row = f.data.data() + (roi.y + y) * src_stride + roi.x * 2;
+      uint8_t* rgb_row = rgb_out + y * dest_stride;
+      
+      for (int x = 0; x < roi_w; x += 2) {
+        // YUYV format: Y0 U Y1 V (4 bytes for 2 pixels)
+        int y0 = yuyv_row[x * 2 + 0];
+        int u  = yuyv_row[x * 2 + 1];
+        int y1 = yuyv_row[x * 2 + 2];
+        int v  = yuyv_row[x * 2 + 3];
+        
+        // ITU-R BT.601 conversion (standardized coefficients)
+        int c0 = y0 - 16;
+        int c1 = y1 - 16;
+        int d = u - 128;
+        int e = v - 128;
+        
+        // Pixel 0
+        int r0 = (298 * c0 + 409 * e + 128) >> 8;
+        int g0 = (298 * c0 - 100 * d - 208 * e + 128) >> 8;
+        int b0 = (298 * c0 + 516 * d + 128) >> 8;
+        
+        rgb_row[x * 3 + 0] = std::min(std::max(r0, 0), 255);
+        rgb_row[x * 3 + 1] = std::min(std::max(g0, 0), 255);
+        rgb_row[x * 3 + 2] = std::min(std::max(b0, 0), 255);
+        
+        // Pixel 1 (if within bounds)
+        if (x + 1 < roi_w) {
+          int r1 = (298 * c1 + 409 * e + 128) >> 8;
+          int g1 = (298 * c1 - 100 * d - 208 * e + 128) >> 8;
+          int b1 = (298 * c1 + 516 * d + 128) >> 8;
+          
+          rgb_row[(x + 1) * 3 + 0] = std::min(std::max(r1, 0), 255);
+          rgb_row[(x + 1) * 3 + 1] = std::min(std::max(g1, 0), 255);
+          rgb_row[(x + 1) * 3 + 2] = std::min(std::max(b1, 0), 255);
+        }
+      }
+    }
+  };
+  
+  // Convert tv1 (left side) - start at column 0
+  yuyv_roi_to_rgb(tv1_roi, rgb_composite.data(), composite_w * 3);
+  
+  // Convert tv2 (right side) - start at column roi_w  
+  yuyv_roi_to_rgb(tv2_roi, rgb_composite.data() + roi_w * 3, composite_w * 3);
+  
+  // Compress to JPEG using TurboJPEG
+  tjhandle tj = tjInitCompress();
+  if (!tj) {
+    Logger::instance().log(LogLevel::ERROR, "Frame streaming: Failed to initialize TurboJPEG compressor");
+    return;
+  }
+  
+  unsigned char* jpeg_buf = nullptr;
+  unsigned long jpeg_size = 0;
+  
+  int ret = tjCompress2(tj, rgb_composite.data(), composite_w, 0, composite_h, TJPF_RGB,
+                        &jpeg_buf, &jpeg_size, TJSAMP_422, 85, TJFLAG_FASTDCT);
+  
+  if (ret == 0 && jpeg_buf) {
+    // Atomic write: write to .tmp then rename
+    FILE* fp = std::fopen("/tmp/output.jpg.tmp", "wb");
+    if (fp) {
+      std::fwrite(jpeg_buf, 1, jpeg_size, fp);
+      std::fclose(fp);
+      std::rename("/tmp/output.jpg.tmp", "/tmp/output.jpg");
+    }
+    tjFree(jpeg_buf);
+  }
+  
+  tjDestroy(tj);
 }
 
 } // namespace wvm

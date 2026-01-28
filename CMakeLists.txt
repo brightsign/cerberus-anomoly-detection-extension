@@ -197,6 +197,7 @@ add_executable(anomaly_detection ${ANOMALY_SOURCES})
 # Link libraries
 target_link_libraries(anomaly_detection
   ${RKNN_RT_LIB}
+  ${TURBOJPEG_LIB}
   pthread
 )
 
