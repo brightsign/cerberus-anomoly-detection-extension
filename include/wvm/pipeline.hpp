@@ -15,6 +15,7 @@
 #include <atomic>
 #include <thread>
 #include <memory>
+#include <fstream>
 
 namespace wvm {
 
@@ -44,6 +45,13 @@ private:
   // Camera offline detection
   uint64_t last_frame_ts_ = 0;
   bool camera_offline_active_ = false;
+
+  // Auto-reference (record+detect in a single run)
+  bool ref_auto_ = false;
+  uint64_t last_ref_append_ts_ = 0;
+  uint64_t last_ref_flush_ts_ = 0;
+  bool ref_armed_ = false;
+  std::ofstream ref_record_ofs_;
 
   // Queues
   TsQueue<CapturedFrame> frame_q_{2};

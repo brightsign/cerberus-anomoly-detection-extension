@@ -11,10 +11,11 @@ struct TvState {
 
   // BLACK detection
   uint64_t black_since = 0;
+  uint64_t black_recover_since = 0;
   bool black_active = false;
 
   // FREEZE detection via k progression
-  int last_k = -1;
+  int64_t last_k = -1;
   uint64_t freeze_since = 0;
   bool freeze_active = false;
 
@@ -41,9 +42,10 @@ public:
                             const std::string& tv_id,
                             float luma_mean,
                             float luma_var,
-                            int k_best,
+                            int64_t k_best,
                             float sim_best,
-                            int k_wall);
+                            int64_t k_wall,
+                            bool content_anomalies = true);
 
 private:
   AnomalyConfig cfg_;

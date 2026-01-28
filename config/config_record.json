@@ -1,0 +1,65 @@
+{
+  "_comment": "Configuration for RECORDING reference embeddings from tv1",
+  
+  "device": {
+    "camera_device": "/dev/video1",
+    "width": 1280,
+    "height": 720,
+    "fps": 10,
+    "pixel_format": "YUYV"
+  },
+  
+  "model": {
+    "rknn_path": "/opt/brightsign/mobilenetv2-1.0-224-feature.rknn",
+    "input_w": 224,
+    "input_h": 224,
+    "embedding_dim": 1280
+  },
+  
+  "reference": {
+    "enabled": true,
+    "mode": "record",
+    "ref_fps": 5,
+    "embeddings_path": "/storage/sd/references/demo/ref_embeddings.f32",
+    "record_tv_id": "tv1",
+    "record_seconds": 60
+  },
+  
+  "roi": {
+    "mode": "rect",
+    "_comment": "Adjust x,y,w,h coordinates to match your camera framing",
+    "tvs": [
+      { 
+        "id": "tv1", 
+        "x": 50, 
+        "y": 80, 
+        "w": 560, 
+        "h": 620,
+        "_comment": "Left monitor (reference)"
+      },
+      { 
+        "id": "tv2", 
+        "x": 650, 
+        "y": 80, 
+        "w": 560, 
+        "h": 620,
+        "_comment": "Right monitor (test)"
+      }
+    ]
+  },
+  
+  "anomaly": {
+    "enabled": false,
+    "_comment": "Disabled during recording - only capturing reference embeddings"
+  },
+  
+  "mqtt": {
+    "enabled": false,
+    "_comment": "No events during recording"
+  },
+  
+  "logging": {
+    "level": "INFO",
+    "path": "/tmp/videowall-monitor.log"
+  }
+}

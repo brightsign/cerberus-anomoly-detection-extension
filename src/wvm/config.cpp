@@ -43,9 +43,18 @@ bool load_config(const std::string& path, AppConfig& out) {
     auto r = j["reference"];
     out.reference.enabled = r.value("enabled", out.reference.enabled);
     out.reference.ref_fps = r.value("ref_fps", out.reference.ref_fps);
+    out.reference.mode = r.value("mode", out.reference.mode);
     out.reference.embeddings_path = r.value("embeddings_path", out.reference.embeddings_path);
     out.reference.index_path = r.value("index_path", out.reference.index_path);
     out.reference.search_window_seconds = r.value("search_window_seconds", out.reference.search_window_seconds);
+
+    // Auto mode
+    out.reference.auto_source = r.value("auto_source", out.reference.auto_source);
+    out.reference.ref_tv_id = r.value("ref_tv_id", out.reference.ref_tv_id);
+    out.reference.auto_min_ref_seconds = r.value("auto_min_ref_seconds", out.reference.auto_min_ref_seconds);
+    out.reference.auto_persist = r.value("auto_persist", out.reference.auto_persist);
+    out.reference.auto_persist_path = r.value("auto_persist_path", out.reference.auto_persist_path);
+    out.reference.auto_max_seconds = r.value("auto_max_seconds", out.reference.auto_max_seconds);
   }
 
   if (j.contains("roi")) {
@@ -69,9 +78,18 @@ bool load_config(const std::string& path, AppConfig& out) {
     auto a = j["anomaly"];
     out.anomaly.enabled = a.value("enabled", out.anomaly.enabled);
     out.anomaly.sample_fps = a.value("sample_fps", out.anomaly.sample_fps);
-    out.anomaly.black_luma_mean = a.value("black_luma_mean", out.anomaly.black_luma_mean);
-    out.anomaly.black_luma_var  = a.value("black_luma_var", out.anomaly.black_luma_var);
+    
+    // BLACK detection with hysteresis (backward compatible with old config keys)
+    out.anomaly.black_enter_mean = a.value("black_enter_mean", 
+                                           a.value("black_luma_mean", out.anomaly.black_enter_mean));
+    out.anomaly.black_exit_mean  = a.value("black_exit_mean", out.anomaly.black_exit_mean);
+    out.anomaly.black_enter_var  = a.value("black_enter_var", 
+                                           a.value("black_luma_var", out.anomaly.black_enter_var));
+    out.anomaly.black_exit_var   = a.value("black_exit_var", out.anomaly.black_exit_var);
     out.anomaly.persist_black_ms = a.value("persist_black_ms", out.anomaly.persist_black_ms);
+    out.anomaly.persist_black_recover_ms = a.value("persist_black_recover_ms", 
+                                                    out.anomaly.persist_black_recover_ms);
+    
     out.anomaly.persist_freeze_ms = a.value("persist_freeze_ms", out.anomaly.persist_freeze_ms);
     out.anomaly.persist_mismatch_ms = a.value("persist_mismatch_ms", out.anomaly.persist_mismatch_ms);
     out.anomaly.lag_threshold_s = a.value("lag_threshold_s", out.anomaly.lag_threshold_s);
@@ -80,6 +98,12 @@ bool load_config(const std::string& path, AppConfig& out) {
     
     // Basic anomaly detection (reference-less)
     out.anomaly.freeze_similarity = a.value("freeze_similarity", out.anomaly.freeze_similarity);
+    if (a.contains("freeze_ignore_tvs") && a["freeze_ignore_tvs"].is_array()) {
+      out.anomaly.freeze_ignore_tvs.clear();
+      for (auto& v : a["freeze_ignore_tvs"]) {
+        if (v.is_string()) out.anomaly.freeze_ignore_tvs.push_back(v.get<std::string>());
+      }
+    }
     out.anomaly.camera_timeout_ms = a.value("camera_timeout_ms", out.anomaly.camera_timeout_ms);
     out.anomaly.peer_enabled = a.value("peer_enabled", out.anomaly.peer_enabled);
     out.anomaly.peer_similarity_min = a.value("peer_similarity_min", out.anomaly.peer_similarity_min);

@@ -13,50 +13,39 @@
     "embedding_dim": 1280
   },
   "reference": {
-    "enabled": true,
+    "enabled": false,
     "ref_fps": 5,
-    "mode": "auto",
-    "search_window_seconds": 2.0,
-
-    "auto_source": "tv_id",
-    "ref_tv_id": "tv1",
-
-    "auto_min_ref_seconds": 3.0,
-
-    "auto_persist": true,
-    "auto_persist_path": "/storage/sd/references/auto_ref_embeddings.f32",
-
-    "auto_max_seconds": 900
+    "embeddings_path": "/storage/sd/references/my_asset/ref_embeddings.f32",
+    "index_path": "/storage/sd/references/my_asset/ref_index.json",
+    "search_window_seconds": 2.0
   },
   "roi": {
     "mode": "rect",
     "tvs": [
-      { "id": "tv1", "x": 50,  "y": 80, "w": 560, "h": 620, "_comment": "Left monitor - REFERENCE" },
+      { "id": "tv1", "x": 50, "y": 80, "w": 560, "h": 620, "_comment": "Left monitor - REFERENCE" },
       { "id": "tv2", "x": 650, "y": 80, "w": 560, "h": 620, "_comment": "Right monitor - TEST with anomalies" }
     ]
   },
   "anomaly": {
     "enabled": true,
     "sample_fps": 5,
-
-    "black_enter_mean": 120.0,
-    "black_exit_mean": 140.0,
+    "black_enter_mean": 115.0,
+    "black_exit_mean": 135.0,
     "black_enter_var": 10000.0,
     "black_exit_var": 11000.0,
     "persist_black_ms": 500,
     "persist_black_recover_ms": 500,
-
     "persist_freeze_ms": 2000,
     "persist_mismatch_ms": 2500,
     "lag_threshold_s": 1.5,
     "stutter_window_ms": 3000,
     "similarity_min": 0.75,
-
+    "freeze_similarity": 0.9750,
     "camera_timeout_ms": 1500,
-
     "peer_enabled": false,
     "peer_similarity_min": 0.85,
-    "persist_outlier_ms": 2500
+    "persist_outlier_ms": 2500,
+    "freeze_ignore_tvs": ["tv1"]
   },
   "mqtt": {
     "enabled": true,

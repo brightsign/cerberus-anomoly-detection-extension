@@ -68,6 +68,7 @@ bool MqttPublisher::publish(const Event& e) {
   std::string payload = to_json(e);
 
 #ifdef WVM_USE_MOSQUITTO
+  Logger::instance().log(LogLevel::INFO, "MQTT_PUBLISH %s", payload.c_str());
   int rc = mosquitto_publish(mosq_, nullptr, cfg_.topic.c_str(),
                             (int)payload.size(), payload.data(), 0, false);
   if (rc != MOSQ_ERR_SUCCESS) {
