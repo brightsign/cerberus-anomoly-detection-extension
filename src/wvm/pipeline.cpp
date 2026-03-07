@@ -1,5 +1,6 @@
 #include "wvm/pipeline.hpp"
 #include "wvm/v4l2_capture.hpp"
+#include "wvm/gst_rtsp_capture.hpp"
 #include "wvm/logger.hpp"
 #include <chrono>
 #include <turbojpeg.h>
@@ -11,12 +12,22 @@
 
 namespace wvm {
 
+// Helper function to detect if camera_device is an RTSP URL
+static bool is_rtsp_url(const std::string& device) {
+  return (device.find("rtsp://") == 0 || device.find("RTSP://") == 0);
+}
+
 Pipeline::Pipeline(const AppConfig& cfg)
 : cfg_(cfg),
-  cap_(std::make_unique<V4L2Capture>(cfg.device)),
+  cap_(is_rtsp_url(cfg.device.camera_device) 
+       ? static_cast<std::unique_ptr<ICapture>>(std::make_unique<GstRtspCapture>(cfg.device))
+       : static_cast<std::unique_ptr<ICapture>>(std::make_unique<V4L2Capture>(cfg.device))),
   roi_(cfg.roi),
   pre_(cfg.model),
-  mqtt_(cfg.mqtt) {}
+  mqtt_(cfg.mqtt) {
+  Logger::instance().log(LogLevel::INFO, "Pipeline created with %s capture",
+    is_rtsp_url(cfg.device.camera_device) ? "RTSP" : "V4L2");
+}
 
 Pipeline::~Pipeline() { stop(); }
 
@@ -26,8 +37,27 @@ bool Pipeline::start() {
   Logger::instance().log(LogLevel::INFO, "=== PIPELINE BUILD: %s %s ===", __DATE__, __TIME__);
   Logger::instance().log(LogLevel::INFO, "Pipeline start. anomaly.enabled=%d", (int)cfg_.anomaly.enabled);
 
-  if (!cap_->start()) return false;
-  if (!npu_.load(cfg_.model)) return false;
+  fprintf(stderr, "[PIPELINE] Starting capture...\n");
+  fprintf(stderr, "[PIPELINE] camera_device: '%s'\n", cfg_.device.camera_device.c_str());
+  fprintf(stderr, "[PIPELINE] capture_type: %s\n", is_rtsp_url(cfg_.device.camera_device) ? "RTSP" : "V4L2 (USB)");
+  Logger::instance().log(LogLevel::INFO, "Starting capture on device: %s", cfg_.device.camera_device.c_str());
+  if (!cap_->start()) {
+    fprintf(stderr, "[PIPELINE] ERROR: Capture start failed!\n");
+    Logger::instance().log(LogLevel::ERROR, "Capture start failed for device: %s", cfg_.device.camera_device.c_str());
+    return false;
+  }
+  fprintf(stderr, "[PIPELINE] Capture started successfully\n");
+  Logger::instance().log(LogLevel::INFO, "Capture started successfully");
+
+  fprintf(stderr, "[PIPELINE] Loading NPU model: %s\n", cfg_.model.rknn_path.c_str());
+  Logger::instance().log(LogLevel::INFO, "Loading NPU model: %s", cfg_.model.rknn_path.c_str());
+  if (!npu_.load(cfg_.model)) {
+    fprintf(stderr, "[PIPELINE] ERROR: NPU model load failed!\n");
+    Logger::instance().log(LogLevel::ERROR, "NPU model load failed: %s", cfg_.model.rknn_path.c_str());
+    return false;
+  }
+  fprintf(stderr, "[PIPELINE] NPU model loaded successfully\n");
+  Logger::instance().log(LogLevel::INFO, "NPU model loaded successfully");
 
   ref_auto_ = cfg_.reference.enabled && (cfg_.reference.mode == "auto");
   last_ref_append_ts_ = 0;
@@ -64,9 +94,22 @@ bool Pipeline::start() {
         }
       }
     }
-  } else {
-    // Use basic anomaly detection (reference-less)
+  } else if (cfg_.anomaly.enabled) {
+    // Use basic anomaly detection (reference-less) - only if anomaly is enabled
     basic_anomaly_ = std::make_unique<BasicAnomalyEngine>(cfg_.anomaly);
+    Logger::instance().log(LogLevel::INFO, "Basic anomaly detection enabled (peer similarity checking)");
+  } else {
+    Logger::instance().log(LogLevel::INFO, "Anomaly detection disabled (health-only mode)");
+  }
+
+  // Initialize health monitoring if enabled
+  if (cfg_.health.enabled) {
+    health_ = std::make_unique<HealthEngine>(cfg_.health);
+    if (!cfg_.health.osd_prototypes_path.empty()) {
+      health_->load_osd_prototypes(cfg_.health.osd_prototypes_path);
+    }
+    Logger::instance().log(LogLevel::INFO, "Health monitoring enabled: analysis_fps=%d, osd_mode=%s",
+                          cfg_.health.analysis_fps, cfg_.health.osd_mode.c_str());
   }
 
   if (!mqtt_.connect()) {
@@ -77,7 +120,7 @@ bool Pipeline::start() {
   t_pre_ = std::thread(&Pipeline::preprocess_loop, this);
   t_inf_ = std::thread(&Pipeline::inference_loop, this);
 
-  if (cfg_.anomaly.enabled || ref_auto_) {
+  if (cfg_.anomaly.enabled || cfg_.health.enabled || ref_auto_) {
     t_ana_ = std::thread(&Pipeline::analysis_loop, this);
   }
 
@@ -231,12 +274,18 @@ void Pipeline::inference_loop() {
         e.vec = std::move(emb);
         e.luma_mean = ri.luma_mean;
         e.luma_var = ri.luma_var;
+        // Keep RGB data for health monitoring
+        if (cfg_.health.enabled) {
+          e.rgb = ri.rgb;  // Copy RGB data
+          e.rgb_w = ri.w;
+          e.rgb_h = ri.h;
+        }
         eb.embeddings.push_back(std::move(e));
       }
     }
 
-    // Push embeddings to analysis queue if anomaly detection is enabled (reference or basic mode)
-    if (cfg_.anomaly.enabled) {
+    // Push embeddings to analysis queue if anomaly detection or health monitoring is enabled
+    if (cfg_.anomaly.enabled || cfg_.health.enabled) {
       if (!analyze_q_.push(std::move(eb))) break;
     }
   }
@@ -244,6 +293,12 @@ void Pipeline::inference_loop() {
 
 void Pipeline::analysis_loop() {
   Logger::instance().log(LogLevel::INFO, "Analysis loop started");
+  fprintf(stderr, "[ANALYSIS] Analysis loop started\n");
+  fprintf(stderr, "[ANALYSIS] Config: anomaly.enabled=%d, health.enabled=%d, reference.enabled=%d\n",
+    (int)cfg_.anomaly.enabled, (int)cfg_.health.enabled, (int)cfg_.reference.enabled);
+  fprintf(stderr, "[ANALYSIS] Engines: basic_anomaly=%p, health=%p, matcher=%p, anomaly=%p\n",
+    basic_anomaly_.get(), health_.get(), matcher_.get(), anomaly_.get());
+  
   int batch_count = 0;
   while (!stop_) {
     auto oeb = analyze_q_.pop();
@@ -253,6 +308,7 @@ void Pipeline::analysis_loop() {
     if (batch_count <= 5 || batch_count % 20 == 0) {
       Logger::instance().log(LogLevel::INFO, "Analysis: Batch %d received with %zu embeddings", 
                             batch_count, oeb->embeddings.size());
+      fprintf(stderr, "[ANALYSIS] Batch %d: %zu embeddings\n", batch_count, oeb->embeddings.size());
     }
 
     // Check for camera offline (no frames received within timeout)
@@ -412,111 +468,200 @@ void Pipeline::analysis_loop() {
         mqtt_q_.push(std::move(ev));
       }
     }
+
+    // Health monitoring (TV_OFF, BLACK, NO_SIGNAL, WRONG_INPUT detection)
+    if (health_ && !oeb->embeddings.empty()) {
+      if (batch_count <= 5) {
+        fprintf(stderr, "[ANALYSIS] Health monitoring: processing %zu embeddings\n", oeb->embeddings.size());
+      }
+      for (auto& e : oeb->embeddings) {
+        if (batch_count <= 5) {
+          fprintf(stderr, "[ANALYSIS] Health: tv_id=%s, luma_mean=%.1f, luma_var=%.1f, rgb_size=%zu\n",
+            e.tv_id.c_str(), e.luma_mean, e.luma_var, e.rgb.size());
+        }
+        // Pass RGB data for dark_ratio calculation
+        const uint8_t* rgb_ptr = e.rgb.empty() ? nullptr : e.rgb.data();
+        auto health_evs = health_->update(
+          oeb->ts_ms,
+          e.tv_id,
+          e.luma_mean,
+          e.luma_var,
+          rgb_ptr,
+          e.rgb_w,
+          e.rgb_h,
+          e.vec.data(),
+          (int)e.vec.size()
+        );
+
+        if (batch_count <= 5) {
+          fprintf(stderr, "[ANALYSIS] Health returned %zu events for tv_id=%s\n",
+            health_evs.size(), e.tv_id.c_str());
+        }
+
+        for (auto& hev : health_evs) {
+          // Convert HealthEvent to MQTT Event
+          Event ev;
+          ev.ts_ms = hev.ts_ms;
+          ev.tv_id = hev.tv_id;
+          
+          // Map HealthState to EventType
+          // For initial state events (old_state=UNKNOWN), use HEALTH type
+          // For heartbeat events (old_state==new_state), use HEALTH type
+          if (hev.old_state == HealthState::UNKNOWN ||
+              (hev.old_state == hev.new_state)) {
+            ev.type = EventType::HEALTH;  // Initial state report or periodic heartbeat
+          } else {
+            switch (hev.new_state) {
+              case HealthState::TV_OFF:
+                ev.type = EventType::BLACK;  // Reuse BLACK for TV_OFF (most severe)
+                break;
+              case HealthState::BLACK:
+                ev.type = EventType::BLACK;
+                break;
+              case HealthState::NO_SIGNAL:
+              case HealthState::WRONG_INPUT:
+              case HealthState::UNKNOWN:
+                ev.type = EventType::MISMATCH;  // Reuse MISMATCH for OSD detection
+                break;
+              case HealthState::OK:
+                ev.type = EventType::RECOVERED;
+                break;
+              default:
+                continue;  // Skip unknown states
+            }
+          }
+
+          // Build JSON details
+          char details[512];
+          snprintf(details, sizeof(details),
+            "{\"health_state\":\"%s\",\"old_state\":\"%s\",\"luma_mean\":%.1f,\"luma_var\":%.1f,\"dark_ratio\":%.3f,\"osd_similarity\":%.3f,\"osd_label\":\"%s\"}",
+            health_state_to_string(hev.new_state),
+            health_state_to_string(hev.old_state),
+            hev.luma_mean,
+            hev.luma_var,
+            hev.dark_ratio,
+            hev.osd_similarity,
+            hev.osd_label.c_str()
+          );
+          ev.details = details;
+
+          fprintf(stderr, "[ANALYSIS] HEALTH_EVENT: tv=%s state=%s→%s type=%d\n",
+            ev.tv_id.c_str(),
+            health_state_to_string(hev.old_state),
+            health_state_to_string(hev.new_state),
+            (int)ev.type);
+          
+          Logger::instance().log(LogLevel::INFO, "HEALTH_EVENT tv=%s state=%s→%s",
+            hev.tv_id.c_str(),
+            health_state_to_string(hev.old_state),
+            health_state_to_string(hev.new_state));
+          
+          fprintf(stderr, "[ANALYSIS] Pushing health event to MQTT queue\n");
+          mqtt_q_.push(std::move(ev));
+          fprintf(stderr, "[ANALYSIS] Health event pushed to MQTT queue\n");
+        }
+      }
+    } else if (batch_count <= 5) {
+      fprintf(stderr, "[ANALYSIS] Skipping health: health_=%p, embeddings.empty=%d\n",
+        health_.get(), oeb->embeddings.empty());
+    }
   }
 }
 
 void Pipeline::mqtt_loop() {
   Logger::instance().log(LogLevel::INFO, "MQTT loop started");
+  fprintf(stderr, "[MQTT] MQTT loop started, waiting for events...\n");
+  int event_count = 0;
   while (!stop_) {
     auto oe = mqtt_q_.pop();
     if (!oe) break;
+    
+    event_count++;
+    fprintf(stderr, "[MQTT] Event %d: tv=%s type=%d ts=%llu\n",
+      event_count, oe->tv_id.c_str(), (int)oe->type, (unsigned long long)oe->ts_ms);
+    
     mqtt_.publish(*oe);
+    
+    if (event_count <= 5) {
+      fprintf(stderr, "[MQTT] Event %d published successfully\n", event_count);
+    }
   }
+  fprintf(stderr, "[MQTT] MQTT loop stopped, published %d events total\n", event_count);
 }
 
 void Pipeline::save_frame_composite(const CapturedFrame& f) {
   static int frame_save_count = 0;
   frame_save_count++;
   
-  // Log first frame and every 50 frames
   if (frame_save_count == 1) {
     Logger::instance().log(LogLevel::INFO, "Frame streaming: First composite frame saved to /tmp/output.jpg");
   } else if (frame_save_count % 50 == 0) {
     Logger::instance().log(LogLevel::INFO, "Frame streaming: %d composite frames saved (latest: /tmp/output.jpg)", frame_save_count);
   }
 
-  // Get tv1 and tv2 ROIs from config
-  if (cfg_.roi.tvs.size() < 2) {
-    Logger::instance().log(LogLevel::WARN, "Frame streaming: Need at least 2 ROIs for composite, found %zu", cfg_.roi.tvs.size());
-    return;
-  }
-  
-  const auto& tv1_roi = cfg_.roi.tvs[0]; // First ROI (tv1)
-  const auto& tv2_roi = cfg_.roi.tvs[1]; // Second ROI (tv2)
-  
-  const int roi_w = tv1_roi.w;
-  const int roi_h = tv1_roi.h;
-  const int composite_w = roi_w * 2; // Side by side
-  const int composite_h = roi_h;
-  
-  // Convert YUYV to RGB for both ROIs
-  std::vector<uint8_t> rgb_composite(composite_w * composite_h * 3);
-  
-  // Lambda to convert YUYV ROI to RGB (ITU-R BT.601)
-  auto yuyv_roi_to_rgb = [&](const RoiRect& roi, uint8_t* rgb_out, int dest_stride) {
-    const int src_stride = f.width * 2; // YUYV is 2 bytes per pixel
-    
-    for (int y = 0; y < roi_h; ++y) {
-      const uint8_t* yuyv_row = f.data.data() + (roi.y + y) * src_stride + roi.x * 2;
-      uint8_t* rgb_row = rgb_out + y * dest_stride;
-      
-      for (int x = 0; x < roi_w; x += 2) {
-        // YUYV format: Y0 U Y1 V (4 bytes for 2 pixels)
-        int y0 = yuyv_row[x * 2 + 0];
-        int u  = yuyv_row[x * 2 + 1];
-        int y1 = yuyv_row[x * 2 + 2];
-        int v  = yuyv_row[x * 2 + 3];
-        
-        // ITU-R BT.601 conversion (standardized coefficients)
-        int c0 = y0 - 16;
-        int c1 = y1 - 16;
-        int d = u - 128;
-        int e = v - 128;
-        
-        // Pixel 0
-        int r0 = (298 * c0 + 409 * e + 128) >> 8;
-        int g0 = (298 * c0 - 100 * d - 208 * e + 128) >> 8;
-        int b0 = (298 * c0 + 516 * d + 128) >> 8;
-        
-        rgb_row[x * 3 + 0] = std::min(std::max(r0, 0), 255);
-        rgb_row[x * 3 + 1] = std::min(std::max(g0, 0), 255);
-        rgb_row[x * 3 + 2] = std::min(std::max(b0, 0), 255);
-        
-        // Pixel 1 (if within bounds)
-        if (x + 1 < roi_w) {
-          int r1 = (298 * c1 + 409 * e + 128) >> 8;
-          int g1 = (298 * c1 - 100 * d - 208 * e + 128) >> 8;
-          int b1 = (298 * c1 + 516 * d + 128) >> 8;
-          
-          rgb_row[(x + 1) * 3 + 0] = std::min(std::max(r1, 0), 255);
-          rgb_row[(x + 1) * 3 + 1] = std::min(std::max(g1, 0), 255);
-          rgb_row[(x + 1) * 3 + 2] = std::min(std::max(b1, 0), 255);
-        }
+  const auto& tvs = cfg_.roi.tvs;
+  if (tvs.empty()) return;
+
+  // Thumbnail size per ROI (scale down to fit all ROIs side-by-side)
+  const int THUMB_W = 320;
+  const int THUMB_H = 240;
+  const int n = (int)tvs.size();
+  const int composite_w = THUMB_W * n;
+  const int composite_h = THUMB_H;
+
+  std::vector<uint8_t> rgb_composite(composite_w * composite_h * 3, 0);
+
+  // YUYV ROI → downscaled RGB thumbnail at dest_x offset in composite
+  auto render_roi = [&](const RoiRect& roi, int dest_x) {
+    const int src_stride = f.width * 2;
+    // Clamp ROI to frame bounds
+    int sx = std::max(0, roi.x);
+    int sy = std::max(0, roi.y);
+    int sw = std::min(roi.w, f.width  - sx);
+    int sh = std::min(roi.h, f.height - sy);
+    if (sw <= 0 || sh <= 0) return;
+
+    for (int ty = 0; ty < THUMB_H; ++ty) {
+      // Source row (nearest-neighbour scale)
+      int src_y = sy + (ty * sh / THUMB_H);
+      const uint8_t* yuyv_row = f.data.data() + src_y * src_stride;
+      uint8_t* out_row = rgb_composite.data() + ty * composite_w * 3 + dest_x * 3;
+
+      for (int tx = 0; tx < THUMB_W; ++tx) {
+        int src_x = sx + (tx * sw / THUMB_W);
+        // Align to even x for YUYV pair
+        int pair_x = src_x & ~1;
+        const uint8_t* p = yuyv_row + pair_x * 2;
+
+        int Y  = (src_x & 1) ? p[2] : p[0];
+        int U  = p[1];
+        int V  = p[3];
+        int c  = Y - 16;
+        int d  = U - 128;
+        int e  = V - 128;
+
+        out_row[tx * 3 + 0] = (uint8_t)std::min(std::max((298*c + 409*e + 128) >> 8, 0), 255);
+        out_row[tx * 3 + 1] = (uint8_t)std::min(std::max((298*c - 100*d - 208*e + 128) >> 8, 0), 255);
+        out_row[tx * 3 + 2] = (uint8_t)std::min(std::max((298*c + 516*d + 128) >> 8, 0), 255);
       }
     }
   };
-  
-  // Convert tv1 (left side) - start at column 0
-  yuyv_roi_to_rgb(tv1_roi, rgb_composite.data(), composite_w * 3);
-  
-  // Convert tv2 (right side) - start at column roi_w  
-  yuyv_roi_to_rgb(tv2_roi, rgb_composite.data() + roi_w * 3, composite_w * 3);
-  
+
+  for (int i = 0; i < n; ++i) {
+    render_roi(tvs[i], i * THUMB_W);
+  }
+
   // Compress to JPEG using TurboJPEG
   tjhandle tj = tjInitCompress();
-  if (!tj) {
-    Logger::instance().log(LogLevel::ERROR, "Frame streaming: Failed to initialize TurboJPEG compressor");
-    return;
-  }
-  
+  if (!tj) return;
+
   unsigned char* jpeg_buf = nullptr;
   unsigned long jpeg_size = 0;
-  
+
   int ret = tjCompress2(tj, rgb_composite.data(), composite_w, 0, composite_h, TJPF_RGB,
                         &jpeg_buf, &jpeg_size, TJSAMP_422, 85, TJFLAG_FASTDCT);
-  
+
   if (ret == 0 && jpeg_buf) {
-    // Atomic write: write to .tmp then rename
     FILE* fp = std::fopen("/tmp/output.jpg.tmp", "wb");
     if (fp) {
       std::fwrite(jpeg_buf, 1, jpeg_size, fp);
@@ -525,7 +670,7 @@ void Pipeline::save_frame_composite(const CapturedFrame& f) {
     }
     tjFree(jpeg_buf);
   }
-  
+
   tjDestroy(tj);
 }
 

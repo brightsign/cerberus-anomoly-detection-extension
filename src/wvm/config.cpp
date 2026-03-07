@@ -110,6 +110,39 @@ bool load_config(const std::string& path, AppConfig& out) {
     out.anomaly.persist_outlier_ms = a.value("persist_outlier_ms", out.anomaly.persist_outlier_ms);
   }
 
+  if (j.contains("health")) {
+    auto h = j["health"];
+    out.health.enabled = h.value("enabled", out.health.enabled);
+    out.health.analysis_fps = h.value("analysis_fps", out.health.analysis_fps);
+    out.health.dark_luma_threshold = h.value("dark_luma_threshold", out.health.dark_luma_threshold);
+    
+    out.health.black_enter_ratio = h.value("black_enter_ratio", out.health.black_enter_ratio);
+    out.health.black_exit_ratio = h.value("black_exit_ratio", out.health.black_exit_ratio);
+    out.health.black_var_enter = h.value("black_var_enter", out.health.black_var_enter);
+    out.health.persist_black_ms = h.value("persist_black_ms", out.health.persist_black_ms);
+    out.health.persist_recover_ms = h.value("persist_recover_ms", out.health.persist_recover_ms);
+    
+    out.health.off_mean = h.value("off_mean", out.health.off_mean);
+    out.health.off_var = h.value("off_var", out.health.off_var);
+    out.health.persist_off_ms = h.value("persist_off_ms", out.health.persist_off_ms);
+    
+    out.health.osd_mode = h.value("osd_mode", out.health.osd_mode);
+    out.health.osd_prototypes_path = h.value("osd_prototypes_path", out.health.osd_prototypes_path);
+    out.health.osd_sim_min = h.value("osd_sim_min", out.health.osd_sim_min);
+    out.health.persist_osd_ms = h.value("persist_osd_ms", out.health.persist_osd_ms);
+
+    out.health.heartbeat_interval_ms = h.value("heartbeat_interval_ms", out.health.heartbeat_interval_ms);
+
+    out.health.prototype_capture = h.value("prototype_capture", out.health.prototype_capture);
+    out.health.prototype_capture_seconds = h.value("prototype_capture_seconds", out.health.prototype_capture_seconds);
+    out.health.prototype_output_path = h.value("prototype_output_path", out.health.prototype_output_path);
+    if (h.contains("prototype_labels")) {
+      for (auto& [tv_id, label] : h["prototype_labels"].items()) {
+        out.health.prototype_labels[tv_id] = label.get<std::string>();
+      }
+    }
+  }
+
   if (j.contains("mqtt")) {
     auto m = j["mqtt"];
     out.mqtt.enabled = m.value("enabled", out.mqtt.enabled);

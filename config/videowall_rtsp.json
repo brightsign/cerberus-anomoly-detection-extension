@@ -1,0 +1,67 @@
+{
+  "_comment": "Configuration for video wall monitoring with RTSP camera input",
+  
+  "device": {
+    "_comment": "Use rtsp:// URL for IP cameras, or /dev/videoX for USB cameras",
+    "camera_device": "rtsp://192.168.0.203:8554/mystream",
+    "width": 1280,
+    "height": 720,
+    "fps": 10,
+    "pixel_format": "YUYV"
+  },
+  
+  "model": {
+    "rknn_path": "model/mobilenetv2-embedding-rk3588.rknn",
+    "input_w": 224,
+    "input_h": 224,
+    "embedding_dim": 1280
+  },
+  
+  "reference": {
+    "enabled": true,
+    "mode": "auto",
+    "_comment": "auto mode: learns from tv1, detects anomalies on tv2",
+    "ref_fps": 5,
+    "embeddings_path": "/tmp/auto_reference.f32",
+    "search_window_seconds": 2.0,
+    "coarse_stride_seconds": 1.0,
+    "reacquire_similarity": 0.75
+  },
+  
+  "roi": {
+    "tvs": [
+      { "id": "tv1", "x": 50,  "y": 80, "w": 560, "h": 620, "_comment": "Left monitor - REFERENCE" },
+      { "id": "tv2", "x": 650, "y": 80, "w": 560, "h": 620, "_comment": "Right monitor - TEST" }
+    ]
+  },
+  
+  "anomaly": {
+    "enabled": true,
+    "sample_fps": 5,
+    "black_enter_mean": 115.0,
+    "black_exit_mean": 135.0,
+    "black_enter_var": 10000.0,
+    "black_exit_var": 11000.0,
+    "persist_black_ms": 500,
+    "persist_black_recover_ms": 500,
+    "persist_freeze_ms": 2000,
+    "persist_mismatch_ms": 2500,
+    "lag_threshold_s": 1.5,
+    "stutter_window_ms": 3000,
+    "stutter_threshold": 3,
+    "mismatch_threshold": 0.65,
+    "freeze_threshold": 0.95
+  },
+  
+  "mqtt": {
+    "enabled": true,
+    "broker": "127.0.0.1",
+    "port": 1883,
+    "topic": "videowall/events"
+  },
+  
+  "logging": {
+    "level": "info",
+    "path": "/tmp/anomaly_detection.log"
+  }
+}

@@ -51,6 +51,9 @@ struct Embedding {
   std::vector<float> vec; // embedding_dim
   float luma_mean = 0.0f;
   float luma_var  = 0.0f;
+  std::vector<uint8_t> rgb; // RGB888 data (224x224x3) for health monitoring
+  int rgb_w = 224;
+  int rgb_h = 224;
 };
 
 struct EmbeddingBatch {
@@ -65,7 +68,8 @@ enum class EventType {
   STUTTER,
   MISMATCH,
   CAMERA_OFFLINE,
-  RECOVERED
+  RECOVERED,
+  HEALTH  // Health monitoring events (initial state, state changes)
 };
 
 struct Event {

@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include "wvm/types.hpp"
 
 namespace wvm {
@@ -55,6 +56,41 @@ struct RoiConfig {
   std::vector<RoiRect> tvs;
 };
 
+struct HealthConfig {
+  bool enabled = true;
+  int analysis_fps = 5;
+
+  // Dark pixel detection
+  int dark_luma_threshold = 30;  // Pixels below this are "dark"
+
+  // BLACK detection (dark but not necessarily off)
+  float black_enter_ratio = 0.95f;  // 95% of pixels dark
+  float black_exit_ratio = 0.90f;
+  float black_var_enter = 300.0f;   // Low variance = uniform darkness
+  int persist_black_ms = 1500;
+  int persist_recover_ms = 1500;
+
+  // TV_OFF detection (stricter than BLACK)
+  float off_mean = 6.0f;         // Near-zero luma
+  float off_var = 30.0f;         // Very low variance
+  int persist_off_ms = 2000;
+
+  // OSD detection (NO_SIGNAL, WRONG_INPUT)
+  std::string osd_mode = "embedding_prototypes";  // or "disabled"
+  std::string osd_prototypes_path = "/storage/sd/osd_prototypes.json";
+  float osd_sim_min = 0.85f;     // Minimum similarity to prototype
+  int persist_osd_ms = 1500;
+
+  // Periodic heartbeat: re-publish current state even without change
+  int heartbeat_interval_ms = 30000;  // 0 = disabled
+
+  // Prototype capture: accumulate embeddings for labelled TVs and write JSON
+  bool prototype_capture = false;
+  std::unordered_map<std::string, std::string> prototype_labels;  // tv_id → label
+  int prototype_capture_seconds = 8;
+  std::string prototype_output_path = "/storage/sd/osd_prototypes.json";
+};
+
 struct AnomalyConfig {
   bool enabled = true;
   int sample_fps = 5;
@@ -104,6 +140,7 @@ struct AppConfig {
   ReferenceConfig reference;
   RoiConfig roi;
   AnomalyConfig anomaly;
+  HealthConfig health;  // New health monitoring config
   MqttConfig mqtt;
   LoggingConfig logging;
 };
