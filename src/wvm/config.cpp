@@ -61,6 +61,8 @@ bool load_config(const std::string& path, AppConfig& out) {
     auto rr = j["roi"];
     out.roi.mode = rr.value("mode", out.roi.mode);
     out.roi.tvs.clear();
+
+    // Manual rect ROIs
     if (rr.contains("tvs")) {
       for (auto& tv : rr["tvs"]) {
         RoiRect r;
@@ -71,6 +73,15 @@ bool load_config(const std::string& path, AppConfig& out) {
         r.h  = tv.value("h", 0);
         out.roi.tvs.push_back(r);
       }
+    }
+
+    // Grid ROIs (auto-generated for mosaic streams)
+    if (rr.contains("grid")) {
+      auto g = rr["grid"];
+      out.roi.grid.rows = g.value("rows", out.roi.grid.rows);
+      out.roi.grid.cols = g.value("cols", out.roi.grid.cols);
+      out.roi.grid.count = g.value("count", out.roi.grid.count);
+      out.roi.grid.order = g.value("order", out.roi.grid.order);
     }
   }
 
