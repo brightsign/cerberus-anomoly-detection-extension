@@ -10,6 +10,7 @@
 #include "wvm/matcher.hpp"
 #include "wvm/anomaly.hpp"
 #include "wvm/basic_anomaly.hpp"
+#include "wvm/health_engine.hpp"
 #include "wvm/mqtt.hpp"
 
 #include <atomic>
@@ -40,6 +41,7 @@ private:
   std::unique_ptr<Matcher> matcher_;
   std::unique_ptr<AnomalyEngine> anomaly_;
   std::unique_ptr<BasicAnomalyEngine> basic_anomaly_;
+  std::unique_ptr<HealthEngine> health_;  // New health monitoring engine
   MqttPublisher mqtt_;
 
   // Camera offline detection

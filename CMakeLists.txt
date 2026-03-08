@@ -177,6 +177,7 @@ set(ANOMALY_SOURCES
   src/wvm/config.cpp
   src/wvm/logger.cpp
   src/wvm/v4l2_capture.cpp
+  src/wvm/gst_rtsp_capture.cpp
   src/wvm/roi.cpp
   src/wvm/rga_preproc.cpp
   src/wvm/rknn_mobilenet.cpp
@@ -184,6 +185,7 @@ set(ANOMALY_SOURCES
   src/wvm/matcher.cpp
   src/wvm/anomaly.cpp
   src/wvm/basic_anomaly.cpp
+  src/wvm/health_engine.cpp
   src/wvm/mqtt.cpp
   src/wvm/pipeline.cpp
 )
@@ -199,6 +201,16 @@ target_link_libraries(anomaly_detection
   ${RKNN_RT_LIB}
   ${TURBOJPEG_LIB}
   pthread
+)
+
+# Link GStreamer libraries for RTSP support
+target_link_libraries(anomaly_detection
+  gstreamer-1.0
+  gstapp-1.0
+  gstbase-1.0
+  gstvideo-1.0
+  gobject-2.0
+  glib-2.0
 )
 
 # Conditionally link RGA
@@ -222,9 +234,14 @@ endif()
 # Install executable
 install(TARGETS anomaly_detection DESTINATION bin)
 
-# Install videowall config to config/ directory (not etc/)
-# The application expects config/videowall.json as the default path
-install(FILES config/videowall.json DESTINATION config)
+# Install config files to config/ directory
+# health_5tv_xt5.json is the default for 5-TV health monitoring with RTSP
+install(FILES 
+  config/videowall.json 
+  config/health_5tv.json
+  config/health_5tv_xt5.json
+  config/videowall_rtsp.json
+  DESTINATION config)
 
 # Convert TARGET_SOC to uppercase for SOC_DIR
 string(TOUPPER ${TARGET_SOC} SOC_DIR)

@@ -192,7 +192,8 @@ run_anomaly_detection() {
     
     # Update config.json with detected video device
     # Priority: SD card config > package config
-    local config_file="${SOC_HOME}/config/videowall.json"
+    # Default config: health_5tv_xt5.json (5-TV health monitoring with RTSP support)
+    local config_file="${SOC_HOME}/config/health_5tv_xt5.json"
     local sd_config="/storage/sd/configs/config.json"
     
     # Use SD card config if it exists, otherwise use package config
@@ -205,26 +206,32 @@ run_anomaly_detection() {
     
     # Update camera_device in the config file
     if [ -f "${config_file}" ]; then
-        echo "Updating camera_device in config to: ${video_source}"
-        
         # Show current value before update
         local current_device=$(grep -o '"camera_device"[[:space:]]*:[[:space:]]*"[^"]*"' "${config_file}" 2>/dev/null || echo "not found")
         echo "  Current config value: ${current_device}"
-        
-        # Create backup
-        cp "${config_file}" "${config_file}.bak" 2>/dev/null || true
-        
-        # Update the camera_device field in JSON using sed
-        # This will match "camera_device": "anything" and replace with detected device
-        sed -i.tmp "s|\"camera_device\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"camera_device\": \"${video_source}\"|" "${config_file}"
-        rm -f "${config_file}.tmp"
-        
-        # Verify the update worked
-        local new_device=$(grep -o '"camera_device"[[:space:]]*:[[:space:]]*"[^"]*"' "${config_file}" 2>/dev/null || echo "not found")
-        echo "  Updated config value: ${new_device}"
-        
-        if [ "${current_device}" = "${new_device}" ] && [ "${video_source}" != "/dev/video0" ]; then
-            echo "  WARNING: Config update may have failed - value unchanged!"
+
+        # If config already has an RTSP URL, never overwrite it with a USB device
+        if echo "${current_device}" | grep -qi "rtsp://"; then
+            echo "  Config already has RTSP URL - skipping auto-detection override"
+            echo "  Using RTSP source from config (not detected USB device: ${video_source})"
+        else
+            echo "Updating camera_device in config to: ${video_source}"
+
+            # Create backup
+            cp "${config_file}" "${config_file}.bak" 2>/dev/null || true
+
+            # Update the camera_device field in JSON using sed
+            # This will match "camera_device": "anything" and replace with detected device
+            sed -i.tmp "s|\"camera_device\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"camera_device\": \"${video_source}\"|" "${config_file}"
+            rm -f "${config_file}.tmp"
+
+            # Verify the update worked
+            local new_device=$(grep -o '"camera_device"[[:space:]]*:[[:space:]]*"[^"]*"' "${config_file}" 2>/dev/null || echo "not found")
+            echo "  Updated config value: ${new_device}"
+
+            if [ "${current_device}" = "${new_device}" ] && [ "${video_source}" != "/dev/video0" ]; then
+                echo "  WARNING: Config update may have failed - value unchanged!"
+            fi
         fi
     else
         echo "WARNING: Config file not found: ${config_file}"
@@ -248,33 +255,46 @@ run_anomaly_detection() {
         
         # Create a wrapper script that handles exit code 42 (config change)
         # Redirect all output to a log file for debugging
-        cat > /tmp/anomaly_detection_wrapper.sh << 'WRAPPER_EOF'
+        # IMPORTANT: Use regular cat (not <<'WRAPPER_EOF') to allow variable expansion
+        cat > /tmp/anomaly_detection_wrapper.sh << WRAPPER_EOF
 #!/bin/bash
 # Auto-restart wrapper for anomaly_detection
 # Restarts on exit code 42 (config change detected)
 
-SOC_HOME="$1"
+SOC_HOME="\$1"
 LOG_FILE="/tmp/anomaly_detection.log"
 
 # Redirect all output to log file
-exec >> ${LOG_FILE} 2>&1
+exec >> \${LOG_FILE} 2>&1
 
-echo "[$(date)] ========================================"
-echo "[$(date)] Wrapper script started"
-echo "[$(date)] SOC_HOME=${SOC_HOME}"
-echo "[$(date)] PWD=$(pwd)"
-echo "[$(date)] ========================================"
-echo "[$(date)] Environment check:"
-echo "[$(date)]   LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
-echo "[$(date)]   GST_PLUGIN_PATH=${GST_PLUGIN_PATH}"
-echo "[$(date)] ========================================"
-echo "[$(date)] Checking if executable exists: ${SOC_HOME}/anomaly_detection"
-ls -la ${SOC_HOME}/anomaly_detection
-echo "[$(date)] Checking model file:"
-ls -la ${SOC_HOME}/model/*.rknn 2>&1 || echo "  No model files found"
-echo "[$(date)] Checking config file:"
-ls -la ${SOC_HOME}/config/videowall.json 2>&1 || echo "  No config file found"
-echo "[$(date)] ========================================"
+# Setup GStreamer environment (inherited from parent)
+export GST_PLUGIN_PATH="${GST_PLUGIN_PATH}"
+export GST_PLUGIN_SYSTEM_PATH="${GST_PLUGIN_SYSTEM_PATH}"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}"
+export GST_REGISTRY="${GST_REGISTRY}"
+export GST_PLUGIN_SCANNER="${GST_PLUGIN_SCANNER}"
+export GST_REGISTRY_REUSE_PLUGIN_SCANNER="${GST_REGISTRY_REUSE_PLUGIN_SCANNER}"
+export GST_DEBUG_NO_COLOR="${GST_DEBUG_NO_COLOR}"
+
+echo "[\$(date)] ========================================"
+echo "[\$(date)] Wrapper script started"
+echo "[\$(date)] SOC_HOME=\${SOC_HOME}"
+echo "[\$(date)] PWD=\$(pwd)"
+echo "[\$(date)] ========================================"
+echo "[\$(date)] Environment check:"
+echo "[\$(date)]   LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}"
+echo "[\$(date)]   GST_PLUGIN_PATH=\${GST_PLUGIN_PATH}"
+echo "[\$(date)]   GST_PLUGIN_SCANNER=\${GST_PLUGIN_SCANNER}"
+echo "[\$(date)] ========================================"
+echo "[\$(date)] Checking if executable exists: \${SOC_HOME}/anomaly_detection"
+ls -la \${SOC_HOME}/anomaly_detection
+echo "[\$(date)] Checking model file:"
+ls -la \${SOC_HOME}/model/*.rknn 2>&1 || echo "  No model files found"
+echo "[\$(date)] Checking config files:"
+ls -la \${SOC_HOME}/config/*.json 2>&1 || echo "  No config files found"
+echo "[\$(date)] Default config (health_5tv_xt5.json):"
+ls -la \${SOC_HOME}/config/health_5tv_xt5.json 2>&1 || echo "  Default config not found"
+echo "[\$(date)] ========================================"
 
 # Function to monitor process and detect hangs
 monitor_process() {
@@ -304,49 +324,49 @@ monitor_process() {
 }
 
 while true; do
-    echo "[$(date)] ========================================"
-    echo "[$(date)] Starting anomaly_detection..."
-    echo "[$(date)] Command: ${SOC_HOME}/anomaly_detection"
-    echo "[$(date)] ========================================"
+    echo "[\$(date)] ========================================"
+    echo "[\$(date)] Starting anomaly_detection..."
+    echo "[\$(date)] Command: \${SOC_HOME}/anomaly_detection"
+    echo "[\$(date)] ========================================"
     
     # Start the process in background so we can monitor it
-    ${SOC_HOME}/anomaly_detection &
-    PID=$!
+    \${SOC_HOME}/anomaly_detection &
+    PID=\$!
     
-    echo "[$(date)] Process started with PID: ${PID}"
-    echo "[$(date)] Monitoring for 10 seconds..."
+    echo "[\$(date)] Process started with PID: \${PID}"
+    echo "[\$(date)] Monitoring for 10 seconds..."
     
     # Wait for the process to finish or timeout
-    wait $PID 2>/dev/null
-    EXIT_CODE=$?
+    wait \$PID 2>/dev/null
+    EXIT_CODE=\$?
     
-    echo "[$(date)] ========================================"
-    echo "[$(date)] anomaly_detection exited with code ${EXIT_CODE}"
+    echo "[\$(date)] ========================================"
+    echo "[\$(date)] anomaly_detection exited with code \${EXIT_CODE}"
     
     # Check for common exit codes
-    if [ $EXIT_CODE -eq 139 ]; then
-        echo "[$(date)] ERROR: Segmentation fault (exit code 139)!"
-        echo "[$(date)] This usually indicates a null pointer dereference or memory corruption."
-    elif [ $EXIT_CODE -eq 134 ]; then
-        echo "[$(date)] ERROR: Aborted (exit code 134)!"
-        echo "[$(date)] This usually indicates an assertion failure or abort() call."
-    elif [ $EXIT_CODE -eq 127 ]; then
-        echo "[$(date)] ERROR: Command not found or library missing (exit code 127)!"
-    elif [ $EXIT_CODE -eq 1 ]; then
-        echo "[$(date)] ERROR: General error (exit code 1)"
+    if [ \$EXIT_CODE -eq 139 ]; then
+        echo "[\$(date)] ERROR: Segmentation fault (exit code 139)!"
+        echo "[\$(date)] This usually indicates a null pointer dereference or memory corruption."
+    elif [ \$EXIT_CODE -eq 134 ]; then
+        echo "[\$(date)] ERROR: Aborted (exit code 134)!"
+        echo "[\$(date)] This usually indicates an assertion failure or abort() call."
+    elif [ \$EXIT_CODE -eq 127 ]; then
+        echo "[\$(date)] ERROR: Command not found or library missing (exit code 127)!"
+    elif [ \$EXIT_CODE -eq 1 ]; then
+        echo "[\$(date)] ERROR: General error (exit code 1)"
     fi
     
-    echo "[$(date)] ========================================"
+    echo "[\$(date)] ========================================"
     
-    if [ $EXIT_CODE -eq 42 ]; then
-        echo "[$(date)] Config change detected (exit code 42), restarting in 2 seconds..."
+    if [ \$EXIT_CODE -eq 42 ]; then
+        echo "[\$(date)] Config change detected (exit code 42), restarting in 2 seconds..."
         sleep 2
     else
-        echo "[$(date)] anomaly_detection exited with code $EXIT_CODE, stopping."
+        echo "[\$(date)] anomaly_detection exited with code \$EXIT_CODE, stopping (check /tmp/anomaly_crash.txt and /tmp/anomaly_detection.log)."
         break
     fi
 done
-echo "[$(date)] Wrapper script exiting"
+echo "[\$(date)] Wrapper script exiting"
 WRAPPER_EOF
         chmod +x /tmp/anomaly_detection_wrapper.sh
         
@@ -452,14 +472,26 @@ setup_gstreamer_env() {
     # CRITICAL: Bundled plugins MUST come FIRST
     # ext-bundle includes RTSP plugins + libgstcoreelements.so (queue)
     # All plugins are from same GStreamer version for compatibility
-    export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_anomaly/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
+    export GST_PLUGIN_PATH=${SCRIPT_PATH}/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
     export GST_PLUGIN_SYSTEM_PATH=$GST_PLUGIN_PATH
     
     # Include MQTT bin directory first so mosquitto utilities find their libraries
     # Also include bin directory for all other shared libraries
-    export LD_LIBRARY_PATH=/var/volatile/bsext/ext_npu_anomaly/$SOC_NAME/bin:/var/volatile/bsext/ext_npu_anomaly/$SOC_NAME/lib:/usr/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=${SCRIPT_PATH}/$SOC_NAME/bin:${SCRIPT_PATH}/$SOC_NAME/lib:/usr/lib:$LD_LIBRARY_PATH
     export GST_REGISTRY="/tmp/gst-registry.bin"
-    export GST_PLUGIN_SCANNER="/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+    
+    # Try to find GST_PLUGIN_SCANNER in multiple locations
+    if [ -f "/usr/libexec/gstreamer-1.0/gst-plugin-scanner" ]; then
+        export GST_PLUGIN_SCANNER="/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+    elif [ -f "/usr/lib/gstreamer-1.0/gst-plugin-scanner" ]; then
+        export GST_PLUGIN_SCANNER="/usr/lib/gstreamer-1.0/gst-plugin-scanner"
+    elif [ -f "/usr/lib/aarch64-linux-gnu/gstreamer-1.0/gstreamer-1.0/gst-plugin-scanner" ]; then
+        export GST_PLUGIN_SCANNER="/usr/lib/aarch64-linux-gnu/gstreamer-1.0/gstreamer-1.0/gst-plugin-scanner"
+    else
+        echo "  WARNING: gst-plugin-scanner not found, GStreamer may scan plugins slowly"
+        export GST_PLUGIN_SCANNER=""
+    fi
+    
     export GST_REGISTRY_REUSE_PLUGIN_SCANNER=1
     export GST_DEBUG_NO_COLOR=1
     
@@ -472,7 +504,7 @@ setup_gstreamer_env() {
     echo "  GST_REGISTRY=$GST_REGISTRY"
     echo "  GST_PLUGIN_SCANNER=$GST_PLUGIN_SCANNER"
     echo "  GST_REGISTRY_REUSE_PLUGIN_SCANNER=$GST_REGISTRY_REUSE_PLUGIN_SCANNER"
-    echo "  MQTT utilities available in: /var/volatile/bsext/ext_npu_anomaly/$SOC_NAME/bin/"
+    echo "  MQTT utilities available in: ${SCRIPT_PATH}/$SOC_NAME/bin/"
 }
 
 do_start() {
@@ -704,6 +736,9 @@ case "$ACTION" in
     run)
         echo "Running ${DAEMON_NAME} in foreground"
         # Run directly in foreground (not as daemon)
+        SOC_NAME=$(get_soc_name)
+        setup_gstreamer_env
+        run_mqtt_broker true 1883
         run_anomaly_detection false
         run_stream_server false 20200
         ;;

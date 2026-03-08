@@ -1,0 +1,34 @@
+{
+  "_comment": "OSD prototype embeddings for TV health classification",
+  "_note": "These are example prototypes - you need to collect real embeddings from your TVs",
+  "_instructions": "Use the prototype collection tool to capture real embeddings",
+  
+  "prototypes": [
+    {
+      "label": "NO_SIGNAL",
+      "sample_count": 20,
+      "_description": "TV showing 'No Signal' screen",
+      "embedding": []
+    },
+    {
+      "label": "WRONG_INPUT",
+      "sample_count": 15,
+      "_description": "TV showing 'HDMI2' or input selection menu",
+      "embedding": []
+    },
+    {
+      "label": "INPUT_MENU",
+      "sample_count": 15,
+      "_description": "TV showing input source menu (HDMI1/HDMI2/etc)",
+      "embedding": []
+    },
+    {
+      "label": "HDMI_MENU",
+      "sample_count": 10,
+      "_description": "TV showing HDMI input selection overlay",
+      "embedding": []
+    }
+  ],
+  
+  "_usage": "Run: ./collect_prototypes --tv tv3 --class NO_SIGNAL --seconds 10 --output /storage/sd/osd_prototypes.json"
+}

@@ -1,0 +1,77 @@
+{
+  "_comment": "5-TV health monitoring with RTSP camera",
+  
+  "device": {
+    "_comment": "RTSP stream showing mosaic of 5 TVs",
+    "camera_device": "rtsp://192.168.0.203:8554/live",
+    "width": 1280,
+    "height": 720,
+    "fps": 10,
+    "pixel_format": "YUYV"
+  },
+  
+  "model": {
+    "rknn_path": "model/mobilenetv2-embedding-rk3588.rknn",
+    "input_w": 224,
+    "input_h": 224,
+    "embedding_dim": 1280
+  },
+  
+  "reference": {
+    "_comment": "Reference matching disabled for health-only monitoring",
+    "enabled": false
+  },
+  
+  "roi": {
+    "mode": "rect",
+    "_comment": "5 TV ROIs extracted from the RTSP mosaic stream",
+    "tvs": [
+      { "id": "tv1", "x": 0,   "y": 0,   "w": 426, "h": 360, "_comment": "Top-left" },
+      { "id": "tv2", "x": 426, "y": 0,   "w": 426, "h": 360, "_comment": "Top-middle" },
+      { "id": "tv3", "x": 852, "y": 0,   "w": 426, "h": 360, "_comment": "Top-right" },
+      { "id": "tv4", "x": 0,   "y": 360, "w": 426, "h": 360, "_comment": "Bottom-left" },
+      { "id": "tv5", "x": 426, "y": 360, "w": 426, "h": 360, "_comment": "Bottom-middle" }
+    ]
+  },
+  
+  "anomaly": {
+    "_comment": "Legacy anomaly detection disabled (using health engine instead)",
+    "enabled": false
+  },
+  
+  "health": {
+    "_comment": "Health monitoring for BLACK, TV_OFF, NO_SIGNAL, WRONG_INPUT detection",
+    "enabled": true,
+    "analysis_fps": 5,
+    
+    "dark_luma_threshold": 30,
+    
+    "black_enter_ratio": 0.95,
+    "black_exit_ratio": 0.90,
+    "black_var_enter": 300.0,
+    "persist_black_ms": 1500,
+    "persist_recover_ms": 1500,
+    
+    "off_mean": 6.0,
+    "off_var": 30.0,
+    "persist_off_ms": 2000,
+    
+    "osd_mode": "embedding_prototypes",
+    "osd_prototypes_path": "/storage/sd/osd_prototypes.json",
+    "osd_sim_min": 0.85,
+    "persist_osd_ms": 1500
+  },
+  
+  "mqtt": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 1883,
+    "topic": "videowall/health",
+    "client_id": "xt5-health-monitor"
+  },
+  
+  "logging": {
+    "level": "info",
+    "path": "/tmp/health_monitor.log"
+  }
+}
