@@ -15,14 +15,8 @@
   },
   "reference": { "enabled": false },
   "roi": {
-    "mode": "rect",
-    "tvs": [
-      { "id": "tv1", "x": 0,   "y": 0,   "w": 426, "h": 360, "_comment": "Top-left - clean video" },
-      { "id": "tv2", "x": 426, "y": 0,   "w": 426, "h": 360, "_comment": "Top-middle - black window" },
-      { "id": "tv3", "x": 852, "y": 0,   "w": 426, "h": 360, "_comment": "Top-right - NO SIGNAL" },
-      { "id": "tv4", "x": 0,   "y": 360, "w": 426, "h": 360, "_comment": "Bottom-left - TV OFF (black)" },
-      { "id": "tv5", "x": 426, "y": 360, "w": 426, "h": 360, "_comment": "Bottom-middle - HDMI2/input menu" }
-    ]
+    "mode": "grid",
+    "grid": { "rows": 2, "cols": 3, "count": 5, "order": "row_major" }
   },
   "anomaly": { "enabled": false },
   "health": {

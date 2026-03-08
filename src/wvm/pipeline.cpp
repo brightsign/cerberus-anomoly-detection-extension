@@ -204,8 +204,9 @@ void Pipeline::capture_loop() {
 
 void Pipeline::preprocess_loop() {
   Logger::instance().log(LogLevel::INFO, "Preprocess loop started");
-  Logger::instance().log(LogLevel::INFO, "Preprocess: ROI count = %zu", roi_.tvs().size());
-  
+  Logger::instance().log(LogLevel::INFO, "Preprocess: ROI mode=%s initial_count=%zu",
+                         cfg_.roi.mode.c_str(), roi_.tvs().size());
+
   const int target_period_ms = 1000 / std::max(1, cfg_.anomaly.sample_fps);
   uint64_t last_emit = 0;
   int batch_count = 0;
@@ -219,6 +220,17 @@ void Pipeline::preprocess_loop() {
       continue;
     }
     last_emit = of->ts_ms;
+
+    // Auto-generate ROIs for grid mode once we know the incoming frame size.
+    if (roi_.update_from_frame(of->width, of->height)) {
+      Logger::instance().log(LogLevel::INFO, "Preprocess: ROI list regenerated. count=%zu frame=%dx%d",
+                             roi_.tvs().size(), of->width, of->height);
+      for (size_t i = 0; i < std::min<size_t>(roi_.tvs().size(), 6); ++i) {
+        const auto& r = roi_.tvs()[i];
+        Logger::instance().log(LogLevel::INFO, "  ROI[%zu] %s: x=%d y=%d w=%d h=%d",
+                               i, r.id.c_str(), r.x, r.y, r.w, r.h);
+      }
+    }
 
     batch_count++;
     RoiBatch batch;
@@ -599,7 +611,7 @@ void Pipeline::save_frame_composite(const CapturedFrame& f) {
     Logger::instance().log(LogLevel::INFO, "Frame streaming: %d composite frames saved (latest: /tmp/output.jpg)", frame_save_count);
   }
 
-  const auto& tvs = cfg_.roi.tvs;
+  const auto& tvs = roi_.tvs();
   if (tvs.empty()) return;
 
   // Thumbnail size per ROI (scale down to fit all ROIs side-by-side)

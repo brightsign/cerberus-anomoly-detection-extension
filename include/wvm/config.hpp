@@ -51,9 +51,20 @@ struct ReferenceConfig {
   int auto_max_seconds = 900; // 15 minutes @ ref_fps
 };
 
+struct RoiGridConfig {
+  int rows = 1;
+  int cols = 1;
+  // Number of TVs to generate. 0 or negative => rows*cols
+  int count = 0;
+  // Currently only "row_major" is supported (tv1..tvN left→right, top→bottom)
+  std::string order = "row_major";
+};
+
 struct RoiConfig {
+  // "rect" (manual) or "grid" (auto ROIs for mosaic streams)
   std::string mode = "rect";
-  std::vector<RoiRect> tvs;
+  std::vector<RoiRect> tvs;   // used when mode=="rect"
+  RoiGridConfig grid;         // used when mode=="grid"
 };
 
 struct HealthConfig {
