@@ -110,6 +110,18 @@ bool MqttPublisher::publish(const Event& e) {
   Logger::instance().log(LogLevel::INFO, "MQTT_PUBLISH %s", payload.c_str());
   int rc = mosquitto_publish(mosq_, nullptr, cfg_.topic.c_str(),
                             (int)payload.size(), payload.data(), 0, false);
+  if (rc == MOSQ_ERR_NO_CONN) {
+    // TCP connection dropped during RTSP outage — reconnect and retry once
+    fprintf(stderr, "[MQTT_PUB] MOSQ_ERR_NO_CONN — reconnecting to broker\n");
+    Logger::instance().log(LogLevel::WARN, "MQTT disconnected (rc=4), reconnecting");
+    connected_ = false;
+    disconnect();
+    if (connect()) {
+      rc = mosquitto_publish(mosq_, nullptr, cfg_.topic.c_str(),
+                             (int)payload.size(), payload.data(), 0, false);
+      fprintf(stderr, "[MQTT_PUB] Retry after reconnect: rc=%d\n", rc);
+    }
+  }
   if (rc != MOSQ_ERR_SUCCESS) {
     fprintf(stderr, "[MQTT_PUB] ERROR: mosquitto_publish failed rc=%d\n", rc);
     Logger::instance().log(LogLevel::WARN, "MQTT publish failed rc=%d", rc);
