@@ -332,7 +332,9 @@ while true; do
     # Start the process in background so we can monitor it
     \${SOC_HOME}/anomaly_detection &
     PID=\$!
-    
+    # Write the actual binary PID so do_stop can kill it directly
+    echo \$PID > /var/run/bsext-anomaly-child.pid
+
     echo "[\$(date)] Process started with PID: \${PID}"
     echo "[\$(date)] Monitoring for 10 seconds..."
     
@@ -594,6 +596,15 @@ do_stop() {
         rm -f ${PIDFILE}
         stopped_demo=true
     fi
+    # Kill the actual anomaly_detection binary (child of wrapper; re-parented on wrapper death)
+    if [ -f "/var/run/bsext-anomaly-child.pid" ]; then
+        local child_pid=$(cat /var/run/bsext-anomaly-child.pid 2>/dev/null)
+        if [ -n "$child_pid" ]; then
+            echo "Killing anomaly_detection binary (PID $child_pid)..."
+            kill -9 "$child_pid" 2>/dev/null || true
+        fi
+        rm -f /var/run/bsext-anomaly-child.pid
+    fi
     
     # Also check for legacy bsext-anomaly.pid
     if [ -f "/var/run/bsext-anomaly.pid" ]; then
@@ -610,15 +621,17 @@ do_stop() {
     fi
     
     if [ "$stopped_demo" = "false" ]; then
-        echo "No PID file found for anomaly_detection, trying to kill by name..."
-        pkill -9 -f "anomaly_detection" || true
+        echo "No PID file found for anomaly_detection, trying to kill by cmdline..."
+        grep -rl "anomaly_detection" /proc/[0-9]*/cmdline 2>/dev/null | grep -oE '[0-9]+' | xargs -r kill -9 2>/dev/null || true
     fi
-    
+
     # Give it a moment and verify it's actually stopped
+    # NOTE: BusyBox pgrep -f only matches 15-char comm; use /proc/*/cmdline directly
     sleep 1
-    if pgrep -f "anomaly_detection" >/dev/null 2>&1; then
-        echo "WARNING: anomaly_detection still running, forcing kill by name..."
-        pkill -9 -f "anomaly_detection" || true
+    _anom_pids=$(grep -rl "anomaly_detection" /proc/[0-9]*/cmdline 2>/dev/null | grep -oE '[0-9]+')
+    if [ -n "$_anom_pids" ]; then
+        echo "WARNING: anomaly_detection still running (PID: $_anom_pids), forcing kill..."
+        echo "$_anom_pids" | xargs -r kill -9 2>/dev/null || true
         sleep 1
     fi
 
