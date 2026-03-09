@@ -333,6 +333,10 @@ bool GstRtspCapture::start() {
   // plugins are guaranteed to be mapped before we touch them.
   gst_init_once();
 
+  // Reset broken state so read_frame() can deliver frames after reconnect.
+  broken_.store(false, std::memory_order_release);
+  broken_log_count_.store(0, std::memory_order_relaxed);
+
   fprintf(stderr, "[RTSP] start(): url=%s\n", cfg_.camera_device.c_str());
   fprintf(stderr, "[RTSP] start(): target=%dx%d@%dfps format=YUY2\n",
           cfg_.width, cfg_.height, cfg_.fps);
@@ -341,9 +345,8 @@ bool GstRtspCapture::start() {
   auto candidates = build_pipeline_candidates();
   fprintf(stderr, "[RTSP] %zu pipeline candidates to try\n", candidates.size());
 
-  // 1 round only at startup — if none of the candidates work, exit cleanly
-  // so the bsext_init wrapper stops and you can SSH in to read the logs.
-  // (Increase to 3+ once the correct pipeline string is confirmed working.)
+  // Try all candidates once. Return false on total failure so the caller
+  // (capture_loop) can apply backoff and retry instead of killing the process.
   const int max_outer = 1;
   int round = 0;
 
@@ -365,21 +368,14 @@ bool GstRtspCapture::start() {
             candidates.size(), round, max_outer);
   }
 
-  fprintf(stderr, "[RTSP] ❌ All candidates failed after %d rounds. Exiting to stop restart loop.\n", max_outer);
-  fprintf(stderr, "[RTSP] ❌ Check: is rtsp://%s reachable? Is the RTSP server running?\n",
-          cfg_.camera_device.c_str());
-  Logger::instance().log(LogLevel::ERROR,
-    "Failed to open RTSP stream after %d rounds — exiting with code 1", max_outer);
-  // Write crash marker so it's visible after exit
-  FILE* mf = fopen("/tmp/anomaly_crash.txt", "w");
-  if (mf) {
-    fprintf(mf, "RTSP failed after %d rounds: %s\n", max_outer, cfg_.camera_device.c_str());
-    fprintf(mf, "Check /tmp/anomaly_detection.log for [RTSP] lines\n");
-    fclose(mf);
-  }
+  fprintf(stderr, "[RTSP] ❌ All candidates failed — will retry later.\n");
+  Logger::instance().log(LogLevel::WARN,
+    "RTSP stream unavailable (%s) — capture loop will retry", cfg_.camera_device.c_str());
   fflush(stderr);
-  _exit(1);  // Hard exit — stops the bsext_init restart loop so you can SSH in
-  return false; // unreachable
+  // Mark as broken so the capture loop's is_broken() check triggers the next
+  // reconnect attempt rather than falling through to read_frame() with a null appsink.
+  broken_.store(true, std::memory_order_release);
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -397,15 +393,23 @@ void GstRtspCapture::stop() {
 // ---------------------------------------------------------------------------
 bool GstRtspCapture::read_frame(CapturedFrame& out) {
   if (!appsink_) {
-    fprintf(stderr, "[RTSP] read_frame(): appsink_ is NULL\n");
+    int n = broken_log_count_.load(std::memory_order_relaxed);
+    if (n < 5) {
+      broken_log_count_.fetch_add(1, std::memory_order_relaxed);
+      fprintf(stderr, "[RTSP] read_frame(): appsink_ is NULL\n");
+    } else if (n == 5) {
+      broken_log_count_.fetch_add(1, std::memory_order_relaxed);
+      fprintf(stderr, "[RTSP] read_frame(): appsink_ NULL log suppressed after 5\n");
+    }
     return false;
   }
   if (broken_.load(std::memory_order_acquire)) {
-    static std::atomic<int> broken_log_count{0};
-    int n = broken_log_count.fetch_add(1, std::memory_order_relaxed);
+    int n = broken_log_count_.load(std::memory_order_relaxed);
     if (n < 5) {
+      broken_log_count_.fetch_add(1, std::memory_order_relaxed);
       fprintf(stderr, "[RTSP] read_frame(): broken_ is SET (#%d), returning false\n", n + 1);
     } else if (n == 5) {
+      broken_log_count_.fetch_add(1, std::memory_order_relaxed);
       fprintf(stderr, "[RTSP] read_frame(): broken_ log suppressed after 5\n");
     }
     return false;

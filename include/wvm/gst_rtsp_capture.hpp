@@ -20,6 +20,7 @@ public:
   bool start() override;
   void stop() override;
   bool read_frame(CapturedFrame& out) override;
+  bool is_broken() const override { return broken_.load(std::memory_order_acquire); }
 
 private:
   DeviceConfig cfg_;
@@ -30,6 +31,7 @@ private:
   GstBus*     bus_      = nullptr;
 
   std::atomic<bool> broken_{false};
+  std::atomic<int>  broken_log_count_{0};  // suppresses spam after first 5 logs
   std::atomic<bool> bus_running_{false};
   std::thread       bus_thread_;
 
