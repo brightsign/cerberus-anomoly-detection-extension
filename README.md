@@ -560,6 +560,7 @@ For each reference asset:
 
 - Choose `ref_fps` (2–10 fps).
 - Sample frames, compute embeddings using the same model:
+
    - `E_ref[k] = Embedding(frame_k)`
 
 - Record `t_ref[k] = k / ref_fps`.
@@ -581,16 +582,20 @@ Per TV `i`, keep a state estimate of the current reference index `k_i`.
 At each sample:
 
 1. Predict:
+
    - `k_pred = k_i + round(ref_fps / sample_fps)`
 
 2. Windowed search:
+
    - Search `k` in `[k_pred - W, k_pred + W]` (W is in frames, e.g., ±2 seconds worth).
 
 3. Select best match:
+
    - `k*_i(t) = argmax_k cosine(E_i(t), E_ref[k])`
    - `S_i(t) = max_k cosine(...)`
 
 4. Update:
+
    - `k_i ← k*_i(t)` with smoothing/continuity constraints.
 
 **Continuity constraints**:
@@ -692,11 +697,13 @@ Output:
 ### 8.1 Static Config Files
 
 - `wall_layout.json`
+
    - TV polygons/corners
    - homographies (optional precomputed)
    - camera intrinsic/extrinsic notes (optional)
 
 - `thresholds.json`
+
    - fps parameters
    - luma thresholds
    - similarity thresholds
@@ -704,17 +711,53 @@ Output:
    - search window sizes
 
 - `references/<asset_id>/ref_index.json`
+
    - ref_fps, duration, loop info
    - mapping indices to time
    - hash/signature of the source asset
 
 - `references/<asset_id>/ref_embeddings.bin`
+
    - embeddings array (float16 or int8)
 
 ### 8.2 Runtime Overrides (Writable)
 
 - `/var/volatile/videowall-monitor/runtime.json`
 - Used for temporary tuning without repackaging extension.
+
+### 8.3 Config Override (SD Card)
+
+The extension ships a default config embedded in the squashfs image. To override
+settings without rebuilding the extension, place a `config.json` on the XT5's
+SD card:
+
+```sh
+/storage/sd/configs/config.json
+```
+
+On startup the extension checks for this file and uses it in place of the
+bundled defaults. This is the recommended way to customise deployment settings
+(RTSP URL, ROI layout, thresholds) in the field without touching the extension
+package.
+
+**Workflow:**
+
+1. Edit a local copy of `config/health_5tv_xt5.json` (or any config in `config/`).
+2. Copy it to the XT5 SD card:
+
+```bash
+scp config/health_5tv_xt5.json brightsign@192.168.0.165:/storage/sd/configs/config.json
+```
+
+3. Restart the extension to pick up the new config:
+
+```bash
+ssh brightsign@192.168.0.165 '/var/volatile/bsext/ext_npu_anomaly/bsext_init restart'
+```
+
+> **Note**: `/storage/sd/` is the XT5's SD card, writable over SSH.
+> The override persists across reboots and extension re-installs (the squashfs
+> is read-only; SD card contents are preserved).
 
 ---
 
@@ -790,7 +833,7 @@ on a development machine and test the anomaly detection extension running on an 
 
 ### Overview
 
-```
+```ini
 Dev machine (192.168.0.203)                   XT5 (192.168.0.165)
 ┌──────────────────────────────┐              ┌──────────────────────────────┐
 │  MediaMTX (Docker) :8554     │              │  anomaly_detection           │
@@ -857,10 +900,9 @@ a 3×2 mosaic (1278×720) from a single input video with synthetic faults:
 | Row 2, Col 2 | tv5 | HDMI2 input menu (WRONG_INPUT) |
 | Row 2, Col 3 | —   | Blank filler |
 
-Run the script from the `rtsp/` directory:
+Run the script:
 
 ```bash
-cd /home/sree/bs/anomaly/rtsp
 ./make_mosaic_rtsp_health_5tv_BlackOnly.sh Anomaly_Albertsons.mp4 rtsp://192.168.0.203:8554/live
 ```
 
@@ -897,7 +939,53 @@ uses grid mode (no manual ROI coordinates needed):
 }
 ```
 
-Grid mode automatically assigns `tv1`..`tv5` to mosaic tiles in row-major order.
+Grid mode automatically assigns `tv1`..`tvN` to mosaic tiles in row-major order
+(left→right, top→bottom). Set `count` to the actual number of TVs; tiles beyond
+`count` are ignored.
+
+#### Grid ROI reference for common TV counts
+
+| TVs | `rows` | `cols` | `count` | Layout |
+|-----|--------|--------|---------|--------|
+| 1   | 1      | 1      | 1       | Single full-frame TV |
+| 2   | 1      | 2      | 2       | Side-by-side |
+| 2   | 2      | 1      | 2       | Stacked vertically |
+| 3   | 1      | 3      | 3       | Single row of 3 |
+| 3   | 2      | 2      | 3       | 2×2 grid, bottom-right tile unused |
+| 4   | 2      | 2      | 4       | 2×2 full grid |
+| 5   | 2      | 3      | 5       | 2×3 grid, bottom-right tile unused ← **default** |
+| 6   | 2      | 3      | 6       | 2×3 full grid |
+| 9   | 3      | 3      | 9       | 3×3 full grid |
+
+**Example: 1 TV (full frame, 1280×720)**
+
+```json
+"roi": {
+  "mode": "grid",
+  "grid": { "rows": 1, "cols": 1, "count": 1, "order": "row_major" }
+}
+```
+
+**Example: 2 TVs side-by-side (each tile 640×720)**
+
+```json
+"roi": {
+  "mode": "grid",
+  "grid": { "rows": 1, "cols": 2, "count": 2, "order": "row_major" }
+}
+```
+
+**Example: 4 TVs in a 2×2 grid (each tile 640×360)**
+
+```json
+"roi": {
+  "mode": "grid",
+  "grid": { "rows": 2, "cols": 2, "count": 4, "order": "row_major" }
+}
+```
+
+> To apply on the XT5 without rebuilding: copy your edited config to
+> `/storage/sd/configs/config.json` (see §8.3) and restart the extension.
 
 ### Step 4: Start the extension on the XT5
 
@@ -910,7 +998,7 @@ ssh brightsign@192.168.0.165
 
 Check the log for successful RTSP connection and grid ROI generation:
 
-```
+```ini
 [RTSP] ✅ Pipeline 1 opened successfully
 [RTSP] ✅ First frame received: 1280x720
 Preprocess: ROI mode=grid initial_count=0
@@ -932,7 +1020,7 @@ mosquitto_sub -h 192.168.0.165 -t 'videowall/health' -v
 
 Expected output (published on state changes + every 30s heartbeat):
 
-```
+```json
 videowall/health {"ts_ms":51407,"tv_id":"tv1","type":"HEALTH","details":{"health_state":"OK","luma_mean":102.0,"luma_var":7122.4,"dark_ratio":0.288}}
 videowall/health {"ts_ms":51407,"tv_id":"tv2","type":"HEALTH","details":{"health_state":"OK","luma_mean":102.0,"luma_var":7126.2,"dark_ratio":0.288}}
 videowall/health {"ts_ms":53774,"tv_id":"tv3","type":"HEALTH","details":{"health_state":"NO_SIGNAL","osd_similarity":0.994,"osd_label":"NO_SIGNAL"}}
@@ -967,7 +1055,6 @@ If the stream is stopped (Ctrl+C the ffmpeg script), the extension:
 ---
 
 ## 13. Testing Strategy
-
 
 ### Offline (host)
 
