@@ -783,7 +783,191 @@ Output:
 
 ---
 
-## 12. Testing Strategy
+## 12. RTSP Testing with MediaMTX
+
+This section describes how to create a synthetic 5-TV health mosaic RTSP stream
+on a development machine and test the anomaly detection extension running on an XT5.
+
+### Overview
+
+```
+Dev machine (192.168.0.203)                   XT5 (192.168.0.165)
+┌──────────────────────────────┐              ┌──────────────────────────────┐
+│  MediaMTX (Docker) :8554     │              │  anomaly_detection           │
+│                              │◄─── RTSP ───►│  config: health_5tv_xt5.json │
+│  make_mosaic_rtsp_...sh      │              │                              │
+│  (ffmpeg → MediaMTX)         │              │  MQTT → mosquitto (127.0.0.1)│
+└──────────────────────────────┘              └──────────────┬───────────────┘
+                                                             │ MQTT
+                                                             ▼
+                                              mosquitto_sub -h 192.168.0.165
+```
+
+### Step 1: Start MediaMTX (RTSP server)
+
+Run MediaMTX in Docker on your development machine:
+
+```bash
+docker run --rm -it -p 8554:8554 bluenviron/mediamtx:latest
+```
+
+MediaMTX listens for RTSP publishers on port `8554` and relays them to viewers.
+
+#### Optional: mediamtx.yml for auto-start with ffmpeg
+
+If you want MediaMTX to start the ffmpeg source automatically on container launch,
+create a `mediamtx.yml` and mount it into the container:
+
+```yaml
+paths:
+  live:
+    # Start ffmpeg as soon as MediaMTX starts
+    runOnInit: >
+      ffmpeg -re -stream_loop -1 -i /home/sree/bs/anomaly/rtsp/Anomaly_Wallmart.mp4
+             -an
+             -vf scale=1920:1080,format=yuv420p
+             -c:v libx264 -preset veryfast -tune zerolatency
+             -profile:v high -level 4.1
+             -b:v 2000k -maxrate 2000k -bufsize 1000k -g 50
+             -fflags nobuffer -flags low_delay -muxdelay 0.1
+             -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnInitRestart: yes
+```
+
+Then run:
+
+```bash
+docker run --rm -it -p 8554:8554 \
+  -v $(pwd)/mediamtx.yml:/mediamtx.yml \
+  -v /home/sree/bs/anomaly/rtsp:/home/sree/bs/anomaly/rtsp:ro \
+  bluenviron/mediamtx:latest
+```
+
+### Step 2: Create the 5-TV health mosaic stream
+
+The script `rtsp/make_mosaic_rtsp_health_5tv_BlackOnly.sh` uses ffmpeg to synthesise
+a 3×2 mosaic (1278×720) from a single input video with synthetic faults:
+
+| Tile | TV ID | Simulated state |
+|------|-------|-----------------|
+| Row 1, Col 1 | tv1 | Clean video (OK) |
+| Row 1, Col 2 | tv2 | Black window (BLACK) at t=8s for 4s |
+| Row 1, Col 3 | tv4 | NO SIGNAL (OSD screen) |
+| Row 2, Col 1 | tv3 | Always black (TV OFF) |
+| Row 2, Col 2 | tv5 | HDMI2 input menu (WRONG_INPUT) |
+| Row 2, Col 3 | —   | Blank filler |
+
+Run the script from the `rtsp/` directory:
+
+```bash
+cd /home/sree/bs/anomaly/rtsp
+./make_mosaic_rtsp_health_5tv_BlackOnly.sh Anomaly_Albertsons.mp4 rtsp://192.168.0.203:8554/live
+```
+
+- First argument: source video file (must be in the current directory)
+- Second argument: RTSP publish URL (`192.168.0.203` = dev machine IP, `live` = stream path)
+
+The script loops indefinitely (Ctrl+C to stop). While running the stream is
+available at `rtsp://192.168.0.203:8554/live`.
+
+#### Tunable parameters (environment variables)
+
+```bash
+TILE_W=426 TILE_H=360 FPS=30 \
+BLACK_AT=8 BLACK_DUR=4 \
+NOSIGNAL_TEXT="NO SIGNAL" HDMI_TEXT="HDMI2" \
+./make_mosaic_rtsp_health_5tv_BlackOnly.sh Anomaly_Albertsons.mp4 rtsp://192.168.0.203:8554/live
+```
+
+### Step 3: Configure the XT5
+
+Ensure `config/health_5tv_xt5.json` on the XT5 points to the RTSP stream and
+uses grid mode (no manual ROI coordinates needed):
+
+```json
+"device": {
+  "camera_device": "rtsp://192.168.0.203:8554/live",
+  "width": 1280,
+  "height": 720,
+  "fps": 10
+},
+"roi": {
+  "mode": "grid",
+  "grid": { "rows": 2, "cols": 3, "count": 5, "order": "row_major" }
+}
+```
+
+Grid mode automatically assigns `tv1`..`tv5` to mosaic tiles in row-major order.
+
+### Step 4: Start the extension on the XT5
+
+SSH into the XT5 and start the extension:
+
+```bash
+ssh brightsign@192.168.0.165
+/var/volatile/bsext/ext_npu_anomaly/bsext_init start
+```
+
+Check the log for successful RTSP connection and grid ROI generation:
+
+```
+[RTSP] ✅ Pipeline 1 opened successfully
+[RTSP] ✅ First frame received: 1280x720
+Preprocess: ROI mode=grid initial_count=0
+Preprocess: ROI list regenerated. count=5 frame=1280x720
+  ROI[0] tv1: x=0 y=0 w=426 h=360
+  ROI[1] tv2: x=426 y=0 w=426 h=360
+  ROI[2] tv3: x=852 y=0 w=428 h=360   ← last col absorbs remainder pixels
+  ROI[3] tv4: x=0 y=360 w=426 h=360
+  ROI[4] tv5: x=426 y=360 w=426 h=360
+```
+
+### Step 5: Monitor MQTT health events
+
+From any machine on the same network, subscribe to the health topic:
+
+```bash
+mosquitto_sub -h 192.168.0.165 -t 'videowall/health' -v
+```
+
+Expected output (published on state changes + every 30s heartbeat):
+
+```
+videowall/health {"ts_ms":51407,"tv_id":"tv1","type":"HEALTH","details":{"health_state":"OK","luma_mean":102.0,"luma_var":7122.4,"dark_ratio":0.288}}
+videowall/health {"ts_ms":51407,"tv_id":"tv2","type":"HEALTH","details":{"health_state":"OK","luma_mean":102.0,"luma_var":7126.2,"dark_ratio":0.288}}
+videowall/health {"ts_ms":53774,"tv_id":"tv3","type":"HEALTH","details":{"health_state":"NO_SIGNAL","osd_similarity":0.994,"osd_label":"NO_SIGNAL"}}
+videowall/health {"ts_ms":53774,"tv_id":"tv5","type":"HEALTH","details":{"health_state":"WRONG_INPUT","osd_similarity":0.993,"osd_label":"INPUT_MENU"}}
+videowall/health {"ts_ms":54470,"tv_id":"tv4","type":"HEALTH","details":{"health_state":"TV_OFF","luma_mean":0.0,"dark_ratio":1.000}}
+```
+
+| TV | Expected state | How detected |
+|----|---------------|--------------|
+| tv1 | `OK` | Normal video, high variance |
+| tv2 | `OK` → `BLACK` → `OK` | Black overlay at t=8s (`persist_black_ms=1500`) |
+| tv3 | `NO_SIGNAL` | OSD prototype match (`osd_similarity≥0.85`) |
+| tv4 | `TV_OFF` | `luma_mean≈0`, `dark_ratio=1.0` (`persist_off_ms=2000`) |
+| tv5 | `WRONG_INPUT` | Input-menu OSD prototype match |
+
+#### Pretty-print with jq
+
+```bash
+mosquitto_sub -h 192.168.0.165 -t 'videowall/health' -v | \
+  while read topic msg; do echo "$msg" | jq '.'; done
+```
+
+### RTSP reconnect behaviour
+
+If the stream is stopped (Ctrl+C the ffmpeg script), the extension:
+
+1. Detects failure via GStreamer `ERROR`/`EOS` bus message → sets `broken_`
+2. Logs at most 5 `broken_` messages, then goes silent (no spam)
+3. Calls `stop()` + `start()` with exponential backoff: 2s → 4s → 8s → 16s (capped)
+4. Automatically resumes when the stream restarts — no extension restart needed
+
+---
+
+## 13. Testing Strategy
+
 
 ### Offline (host)
 
@@ -808,7 +992,7 @@ Output:
 
 ---
 
-## 13. Risks and Mitigations
+## 14. Risks and Mitigations
 
 1. **USB camera variability / exposure flicker**
 
@@ -831,7 +1015,7 @@ Output:
 
 ---
 
-## 14. Future Enhancements
+## 15. Future Enhancements
 
 - Auto-ROI discovery (markers, ArUco/AprilTag, or bezel detection).
 - Multi-camera support for large walls.
