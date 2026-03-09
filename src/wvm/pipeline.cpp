@@ -167,8 +167,30 @@ void Pipeline::capture_loop() {
       Logger::instance().log(LogLevel::INFO, "Capture loop: %d iterations, %d frames captured", loop_iterations, frame_count);
     }
     
+    // Reconnect if the stream broke (RTSP disconnect/kill).
+    if (cap_->is_broken()) {
+      Logger::instance().log(LogLevel::WARN, "Capture loop: stream broken, attempting reconnect...");
+      cap_->stop();
+      // Exponential backoff: 2s, 4s, 8s, cap at 16s
+      static int reconnect_delay_ms = 2000;
+      std::this_thread::sleep_for(std::chrono::milliseconds(reconnect_delay_ms));
+      if (cap_->start()) {
+        Logger::instance().log(LogLevel::INFO, "Capture loop: reconnected successfully");
+        reconnect_delay_ms = 2000;  // reset backoff
+      } else {
+        Logger::instance().log(LogLevel::WARN, "Capture loop: reconnect failed, retrying in %dms", reconnect_delay_ms);
+        reconnect_delay_ms = std::min(reconnect_delay_ms * 2, 16000);
+      }
+      continue;
+    }
+
     CapturedFrame f;
-    if (cap_->read_frame(f)) {
+    if (!cap_->read_frame(f)) {
+      // Back off to avoid a busy-spin (e.g. timeout while stream is starting).
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      continue;
+    }
+    {
       frame_count++;
       last_frame_ts_ = f.ts_ms; // Update last frame timestamp
       if (frame_count == 1) {
