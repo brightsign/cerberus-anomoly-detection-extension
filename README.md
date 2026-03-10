@@ -34,6 +34,23 @@ patches, then builds the `anomaly_detection` binary for all platforms.
 ./build-apps Firebird  # RK3576
 ```
 
+**Compile the MobileNetV2 ONNX model to RKNN format (required for NPU inference):**
+
+```bash
+./compile-models          # Compile for all platforms
+./compile-models XT5      # Compile for XT5/RK3588 only
+./compile-models LS5      # Compile for LS5/RK3568 only
+./compile-models Firebird # Compile for Firebird/RK3576 only
+```
+
+If no calibration dataset exists at `toolkit/calibration_dataset.txt`, a synthetic
+one is generated automatically (suitable for testing). For production deployments,
+replace it with real frames from your video content:
+
+```bash
+python3 tools/create_calibration_dataset.py --videos ref1.mp4 ref2.mp4
+```
+
 **Then create the deployable extension package:**
 
 ```bash
@@ -55,12 +72,11 @@ Other `runall.sh` options:
 
 See [DESIGN.md](DESIGN.md) for detailed build documentation.
 
-<VSCode.Cell id="#VSC-rtsp-header01" language="markdown">
 ## Start RTSP Stream
 
 This section describes how to create a synthetic 5-TV health mosaic RTSP stream
 on a development machine for testing the anomaly detection extension on an XT5.
-</VSCode.Cell>
+
 ### Overview
 
 ```ini
@@ -143,7 +159,9 @@ NOSIGNAL_TEXT="NO SIGNAL" HDMI_TEXT="HDMI2" \
 ```
 
 <VSCode.Cell id="#VSC-install-hdr01" language="markdown">
+
 ## Install the Extension
+
 </VSCode.Cell>
 **1. Copy the package to the XT5:**
 
@@ -256,8 +274,11 @@ To start/stop the extension manually at any time:
 ```
 
 <VSCode.Cell id="#VSC-test-hdr01" language="markdown">
+
 ## Test and Verify
+
 </VSCode.Cell>
+
 ### Start the extension and verify
 
 SSH into the XT5 and start the extension:
@@ -291,7 +312,7 @@ tail -f /tmp/anomaly_detection.log
 
 The extension runs an HTTP image-stream server on port **20200**. While the extension is running, open a browser on any host in the same network:
 
-```
+```ini
 http://192.168.0.165:20200/
 ```
 
@@ -329,6 +350,7 @@ videowall/health {"ts_ms":54470,"tv_id":"tv4","type":"HEALTH","details":{"health
 mosquitto_sub -h 192.168.0.165 -t 'videowall/health' -v | \
   while read topic msg; do echo "$msg" | jq '.'; done
 ```
+
 ## MobileNetV2 Model
 
 This project uses **MobileNetV2** for embedding-based anomaly detection, replacing traditional object detection models.
@@ -396,24 +418,6 @@ save_reference(embeddings, "ref_embeddings.npy")
 - Mean: ~0.5-0.7
 - Std dev: ~0.5-0.7
 - Sparsity: ~5-10%
-
-**Tools available:**
-
-- `tools/extract_embedding_layer.py` - Extract 1280-dim layer from ONNX (✅ complete)
-- `toolkit/compile_embedding.sh` - Compile embedding model to RKNN (✅ working)
-- **Hardware validated on XT5 (RK3588)** ✅
-
-## Model Compilation and Validation
-
-### Compiled Models
-
-✅ **Successfully compiled MobileNetV2 models for:**
-
-| Platform | SOC    | Model Size | Status | Validation |
-|----------|--------|------------|--------|------------|
-| XT5      | RK3588 | 4.0 MB     | ✅ Ready | ✅ Validated |
-| LS5      | RK3568 | 3.7 MB     | ✅ Ready | ✅ Validated |
-| Firebird | RK3576 | TBD        | ⏳ Pending | - |
 
 ### Model Specifications
 
