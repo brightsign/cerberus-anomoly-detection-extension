@@ -96,7 +96,6 @@ cleanup_all() {
     print_status "Removing downloaded source files..."
     rm -f brightsign-*.tar.gz
     rm -f brightsign-x86_64-cobra-toolchain-*.sh
-    rm -f Dockerfile
     
     # Remove extracted directories
     print_status "Removing extracted directories..."

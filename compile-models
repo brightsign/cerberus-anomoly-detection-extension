@@ -217,23 +217,18 @@ check_prerequisites() {
         cd "${SCRIPT_DIR}"
     fi
     
-    # Check if calibration dataset exists
+    # Check if calibration dataset exists; auto-generate synthetic one if missing
     if [ ! -f "toolkit/calibration_dataset.txt" ]; then
         warn "Calibration dataset not found at: toolkit/calibration_dataset.txt"
         echo ""
-        echo "Please create a calibration dataset with TV screen images:"
+        echo "Auto-generating synthetic calibration dataset for testing..."
+        echo "⚠️  NOTE: Synthetic images are for testing only."
+        echo "   For production, replace with real video frames:"
+        echo "   python3 tools/create_calibration_dataset.py --videos ref1.mp4 ref2.mp4"
         echo ""
-        echo "  # Create dataset directory:"
-        echo "  mkdir -p toolkit/calibration_images"
+        python3 "${SCRIPT_DIR}/tools/create_synthetic_calibration.py" || \
+            error "Failed to create synthetic calibration dataset."
         echo ""
-        echo "  # Capture 100-500 diverse frames from your video content"
-        echo "  # Then create dataset file:"
-        echo "  ls toolkit/calibration_images/*.jpg > toolkit/calibration_dataset.txt"
-        echo ""
-        echo "  # Or extract from reference videos:"
-        echo "  python tools/create_calibration_dataset.py --videos ref1.mp4 ref2.mp4"
-        echo ""
-        error "Calibration dataset not found. Please create it first."
     fi
     
     success "Prerequisites check passed"
