@@ -396,15 +396,16 @@ compile_model() {
     fi
     
     # Check if compilation succeeded and copy to install directory
+    local embed_name="mobilenetv2-embedding-${soc}.rknn"
     if [ -f "toolkit/models/${soc_upper}/${OUTPUT_NAME}" ]; then
-        # Copy to install directory
-        cp "toolkit/models/${soc_upper}/${OUTPUT_NAME}" "install/${soc_upper}/model/"
-        log "Copied model to install/${soc_upper}/model/${OUTPUT_NAME}"
+        # Copy to install directory with the SOC-specific embedding name
+        cp "toolkit/models/${soc_upper}/${OUTPUT_NAME}" "install/${soc_upper}/model/${embed_name}"
+        log "Copied model to install/${soc_upper}/model/${embed_name}"
         
         success "MobileNetV2 compiled successfully for $platform"
         
         # Show model size
-        local size=$(du -h "install/${soc_upper}/model/${OUTPUT_NAME}" | cut -f1)
+        local size=$(du -h "install/${soc_upper}/model/${embed_name}" | cut -f1)
         log "Model size: $size"
     else
         error "Compilation failed - ${OUTPUT_NAME} not found at toolkit/models/${soc_upper}/${OUTPUT_NAME}"
@@ -417,9 +418,10 @@ models_already_compiled() {
         local soc=${PLATFORMS[$platform]}
         local soc_upper=${soc^^}
         local install_dir="${SCRIPT_DIR}/install/${soc_upper}/model"
+        local embed_name="mobilenetv2-embedding-${soc}.rknn"
         
         # Check if model exists in install directory
-        if [ ! -f "$install_dir/${OUTPUT_NAME}" ]; then
+        if [ ! -f "$install_dir/${embed_name}" ]; then
             return 1  # Not all models compiled
         fi
     done
@@ -434,12 +436,13 @@ copy_models() {
         local soc=${PLATFORMS[$platform]}
         local soc_upper=${soc^^}
         
+        local embed_name="mobilenetv2-embedding-${soc}.rknn"
         # Skip if model doesn't exist for this platform
-        if [ ! -f "install/${soc_upper}/model/${OUTPUT_NAME}" ]; then
+        if [ ! -f "install/${soc_upper}/model/${embed_name}" ]; then
             continue
         fi
         
-        log "Model ready: install/${soc_upper}/model/${OUTPUT_NAME}"
+        log "Model ready: install/${soc_upper}/model/${embed_name}"
         
         # Create model config file
         cat > "install/${soc_upper}/model/mobilenetv2_config.json" << JSON
