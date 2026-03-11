@@ -568,14 +568,15 @@ void Pipeline::analysis_loop() {
           // Build JSON details
           char details[512];
           snprintf(details, sizeof(details),
-            "{\"health_state\":\"%s\",\"old_state\":\"%s\",\"luma_mean\":%.1f,\"luma_var\":%.1f,\"dark_ratio\":%.3f,\"osd_similarity\":%.3f,\"osd_label\":\"%s\"}",
+            "{\"health_state\":\"%s\",\"old_state\":\"%s\",\"luma_mean\":%.1f,\"luma_var\":%.1f,\"dark_ratio\":%.3f,\"osd_similarity\":%.3f,\"osd_label\":\"%s\",\"is_heartbeat\":%s}",
             health_state_to_string(hev.new_state),
             health_state_to_string(hev.old_state),
             hev.luma_mean,
             hev.luma_var,
             hev.dark_ratio,
             hev.osd_similarity,
-            hev.osd_label.c_str()
+            hev.osd_label.c_str(),
+            hev.is_heartbeat ? "true" : "false"
           );
           ev.details = details;
 

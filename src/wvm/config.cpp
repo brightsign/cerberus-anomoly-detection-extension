@@ -140,6 +140,9 @@ bool load_config(const std::string& path, AppConfig& out) {
     out.health.osd_mode = h.value("osd_mode", out.health.osd_mode);
     out.health.osd_prototypes_path = h.value("osd_prototypes_path", out.health.osd_prototypes_path);
     out.health.osd_sim_min = h.value("osd_sim_min", out.health.osd_sim_min);
+    out.health.osd_sim_min_no_signal = h.value("osd_sim_min_no_signal", out.health.osd_sim_min_no_signal);
+    out.health.osd_sim_min_wrong_input = h.value("osd_sim_min_wrong_input", out.health.osd_sim_min_wrong_input);
+    out.health.persist_no_signal_ms = h.value("persist_no_signal_ms", out.health.persist_no_signal_ms);
     out.health.persist_osd_ms = h.value("persist_osd_ms", out.health.persist_osd_ms);
 
     out.health.heartbeat_interval_ms = h.value("heartbeat_interval_ms", out.health.heartbeat_interval_ms);
