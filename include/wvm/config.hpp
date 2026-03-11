@@ -89,8 +89,11 @@ struct HealthConfig {
   // OSD detection (NO_SIGNAL, WRONG_INPUT)
   std::string osd_mode = "embedding_prototypes";  // or "disabled"
   std::string osd_prototypes_path = "/storage/sd/osd_prototypes.json";
-  float osd_sim_min = 0.85f;     // Minimum similarity to prototype
-  int persist_osd_ms = 1500;
+  float osd_sim_min = 0.85f;            // Minimum similarity for unknown OSDs
+  float osd_sim_min_no_signal = 0.41f;  // NO_SIGNAL threshold: true≈0.42-0.46, noise≈0.34-0.41
+  float osd_sim_min_wrong_input = 0.75f; // Threshold for WRONG_INPUT / INPUT_MENU (real match ~0.99, noise ~0.4-0.5)
+  int persist_osd_ms = 1500;            // Persistence for WRONG_INPUT / unknown OSD
+  int persist_no_signal_ms = 8000;      // Longer persistence for NO_SIGNAL: real TV-off lasts minutes, noise lasts 2-3s
 
   // Periodic heartbeat: re-publish current state even without change
   int heartbeat_interval_ms = 30000;  // 0 = disabled

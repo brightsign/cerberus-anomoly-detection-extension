@@ -148,13 +148,19 @@ HealthState HealthEngine::determine_state(
   }
 
   // Priority 3: OSD detection (only if not black/off)
-  if (cfg_.osd_mode != "disabled" && osd_sim >= cfg_.osd_sim_min && !osd_label.empty()) {
-    if (osd_label == "NO_SIGNAL") {
+  if (cfg_.osd_mode != "disabled" && !osd_label.empty()) {
+    // NO_SIGNAL uses a lower threshold: when the TV is off the camera ROI
+    // captures room background, pulling the embedding away from any prototype.
+    // Being the best-matching prototype at moderate confidence is sufficient.
+    if (osd_label == "NO_SIGNAL" && osd_sim >= cfg_.osd_sim_min_no_signal) {
       return HealthState::NO_SIGNAL;
-    } else if (osd_label == "WRONG_INPUT" || osd_label == "HDMI_MENU" || 
-               osd_label == "INPUT_MENU") {
+    } else if ((osd_label == "WRONG_INPUT" || osd_label == "HDMI_MENU" ||
+                osd_label == "INPUT_MENU") && osd_sim >= cfg_.osd_sim_min_wrong_input) {
       return HealthState::WRONG_INPUT;
-    } else {
+    } else if (osd_sim >= cfg_.osd_sim_min &&
+               osd_label != "NO_SIGNAL" && osd_label != "WRONG_INPUT" &&
+               osd_label != "HDMI_MENU" && osd_label != "INPUT_MENU") {
+      // Unknown OSD at high confidence
       return HealthState::UNKNOWN;
     }
   }
@@ -171,6 +177,9 @@ int HealthEngine::get_persistence_ms(HealthState from, HealthState to) const {
     return cfg_.persist_black_ms;
   }
   if (to == HealthState::NO_SIGNAL || to == HealthState::WRONG_INPUT || to == HealthState::UNKNOWN) {
+    if (to == HealthState::NO_SIGNAL) {
+      return cfg_.persist_no_signal_ms;  // Longer: real TV-off lasts minutes, noise lasts 2-3s
+    }
     return cfg_.persist_osd_ms;
   }
 
@@ -366,8 +375,26 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
 
   // Update pending state
   if (new_state != tv.pending_state) {
-    tv.pending_state = new_state;
-    tv.pending_enter_ts_ms = ts_ms;
+    // Don't reset the NO_SIGNAL pending timer when a frame returns OK only because
+    // an OSD-anomaly label (NO_SIGNAL or INPUT_MENU) scored below its individual
+    // threshold. Label flips between these two are normal in wide-angle camera setups
+    // where the scene embedding is noisy — the sustained signal is what matters.
+    // Gate on a minimum similarity (0.38) so genuinely low-signal frames still reset.
+    auto is_osd_anomaly_label = [](const std::string& lbl) {
+      return lbl == "NO_SIGNAL" || lbl == "INPUT_MENU" ||
+             lbl == "WRONG_INPUT" || lbl == "HDMI_MENU";
+    };
+    bool preserve_osd_pending =
+      (tv.pending_state == HealthState::NO_SIGNAL ||
+       tv.pending_state == HealthState::WRONG_INPUT) &&
+      new_state == HealthState::OK &&
+      tv.osd_similarity >= 0.38f &&
+      is_osd_anomaly_label(tv.osd_label);
+
+    if (!preserve_osd_pending) {
+      tv.pending_state = new_state;
+      tv.pending_enter_ts_ms = ts_ms;
+    }
   }
 
   // Check if we should transition
@@ -413,6 +440,7 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
       hb.dark_ratio = tv.dark_ratio;
       hb.osd_similarity = tv.osd_similarity;
       hb.osd_label = tv.osd_label;
+      hb.is_heartbeat = true;
       events.push_back(hb);
       tv.last_heartbeat_ts_ms = ts_ms;
 

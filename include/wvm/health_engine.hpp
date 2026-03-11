@@ -64,6 +64,7 @@ public:
     float dark_ratio;
     float osd_similarity;
     std::string osd_label;
+    bool is_heartbeat = false;
   };
 
   std::vector<HealthEvent> update(
