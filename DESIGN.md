@@ -344,11 +344,11 @@ package.
 
 **Workflow:**
 
-1. Edit a local copy of `config/health_5tv_xt5.json` (or any config in `config/`).
+1. Edit a local copy of `config/health_5tv.json` (or any config in `config/`).
 2. Copy it to the XT5 SD card:
 
 ```bash
-scp config/health_5tv_xt5.json brightsign@192.168.0.165:/storage/sd/configs/config.json
+scp config/health_5tv.json brightsign@192.168.0.165:/storage/sd/configs/config.json
 ```
 
 3. Restart the extension to pick up the new config:
