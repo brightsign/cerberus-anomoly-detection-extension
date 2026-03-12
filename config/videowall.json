@@ -7,7 +7,7 @@
     "pixel_format": "YUYV"
   },
   "model": {
-    "rknn_path": "model/mobilenetv2-embedding-rk3588.rknn",
+    "rknn_path": "model/mobilenetv2-embedding-@TARGET_SOC@.rknn",
     "input_w": 224,
     "input_h": 224,
     "embedding_dim": 1280
