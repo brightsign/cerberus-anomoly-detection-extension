@@ -234,14 +234,12 @@ endif()
 # Install executable
 install(TARGETS anomaly_detection DESTINATION bin)
 
-# Install config files to config/ directory
-# health_5tv_xt5.json is the default for 5-TV health monitoring with RTSP
-install(FILES 
-  config/videowall.json 
-  config/health_5tv.json
-  config/health_5tv_xt5.json
-  config/videowall_rtsp.json
-  DESTINATION config)
+# Install config files to config/ directory, substituting @TARGET_SOC@ so
+# rknn_path points to the correct model for each platform (rk3588/rk3568/rk3576).
+foreach(_cfg videowall.json health_5tv.json videowall_rtsp.json)
+  configure_file(config/${_cfg} ${CMAKE_CURRENT_BINARY_DIR}/config/${_cfg} @ONLY)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/config/${_cfg} DESTINATION config)
+endforeach()
 
 # Convert TARGET_SOC to uppercase for SOC_DIR
 string(TOUPPER ${TARGET_SOC} SOC_DIR)

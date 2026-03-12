@@ -83,7 +83,7 @@ on a development machine for testing the anomaly detection extension on an XT5.
 Dev machine (192.168.0.203)                   XT5 (192.168.0.165)
 ┌──────────────────────────────┐              ┌──────────────────────────────┐
 │  MediaMTX (Docker) :8554     │              │  anomaly_detection           │
-│                              │◄─── RTSP ───►│  config: health_5tv_xt5.json │
+│                              │◄─── RTSP ───►│  config: health_5tv.json     │
 │  make_mosaic_rtsp_...sh      │              │                              │
 │  (ffmpeg → MediaMTX)         │              │  MQTT → mosquitto (127.0.0.1)│
 └──────────────────────────────┘              └──────────────┬───────────────┘
@@ -185,7 +185,7 @@ extension manager. The extension starts automatically on the next reboot.
 
 ### Step 3: Configure the XT5
 
-Ensure `config/health_5tv_xt5.json` on the XT5 points to the RTSP stream and
+Ensure `config/health_5tv.json` on the XT5 points to the RTSP stream and
 uses grid mode (no manual ROI coordinates needed):
 
 ```json
@@ -480,8 +480,7 @@ brightsign-npu-anomaly-detection/
 │   └── pipeline.hpp              # Pipeline orchestrator
 ├── include/nlohmann/json.hpp     # JSON library (header-only)
 ├── config/                       # Configuration files
-│   ├── health_5tv_xt5.json       # 5-TV RTSP mosaic config (production)
-│   ├── health_5tv.json           # 5-TV config (USB camera)
+│   ├── health_5tv.json           # 5-TV health monitoring config
 │   ├── config.json               # Default runtime config
 │   ├── config_detect.json        # Detection-only config
 │   ├── config_record.json        # Recording config
