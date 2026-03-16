@@ -244,7 +244,7 @@ void Pipeline::preprocess_loop() {
     last_emit = of->ts_ms;
 
     // Auto-generate ROIs for grid mode once we know the incoming frame size.
-    if (roi_.update_from_frame(of->width, of->height)) {
+    if (roi_.update_from_frame(*of)) {
       Logger::instance().log(LogLevel::INFO, "Preprocess: ROI list regenerated. count=%zu frame=%dx%d",
                              roi_.tvs().size(), of->width, of->height);
       for (size_t i = 0; i < std::min<size_t>(roi_.tvs().size(), 6); ++i) {
@@ -547,7 +547,7 @@ void Pipeline::analysis_loop() {
           } else {
             switch (hev.new_state) {
               case HealthState::TV_OFF:
-                ev.type = EventType::BLACK;  // Reuse BLACK for TV_OFF (most severe)
+                ev.type = EventType::TV_OFF;
                 break;
               case HealthState::BLACK:
                 ev.type = EventType::BLACK;
@@ -555,25 +555,28 @@ void Pipeline::analysis_loop() {
               case HealthState::NO_SIGNAL:
               case HealthState::WRONG_INPUT:
               case HealthState::UNKNOWN:
-                ev.type = EventType::MISMATCH;  // Reuse MISMATCH for OSD detection
+                ev.type = EventType::MISMATCH;
                 break;
               case HealthState::OK:
                 ev.type = EventType::RECOVERED;
                 break;
               default:
-                continue;  // Skip unknown states
+                continue;
             }
           }
 
           // Build JSON details
           char details[512];
           snprintf(details, sizeof(details),
-            "{\"health_state\":\"%s\",\"old_state\":\"%s\",\"luma_mean\":%.1f,\"luma_var\":%.1f,\"dark_ratio\":%.3f,\"osd_similarity\":%.3f,\"osd_label\":\"%s\",\"is_heartbeat\":%s}",
+            "{\"health_state\":\"%s\",\"old_state\":\"%s\",\"luma_mean\":%.1f,\"luma_var\":%.1f,\"dark_ratio\":%.3f,\"sat_mean\":%.1f,\"laplacian_var\":%.0f,\"temporal_diff\":%.2f,\"osd_similarity\":%.3f,\"osd_label\":\"%s\",\"is_heartbeat\":%s}",
             health_state_to_string(hev.new_state),
             health_state_to_string(hev.old_state),
             hev.luma_mean,
             hev.luma_var,
             hev.dark_ratio,
+            hev.sat_mean,
+            hev.laplacian_var,
+            hev.temporal_diff,
             hev.osd_similarity,
             hev.osd_label.c_str(),
             hev.is_heartbeat ? "true" : "false"

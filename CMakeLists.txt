@@ -179,6 +179,7 @@ set(ANOMALY_SOURCES
   src/wvm/v4l2_capture.cpp
   src/wvm/gst_rtsp_capture.cpp
   src/wvm/roi.cpp
+  src/wvm/yolo_tv_detector.cpp
   src/wvm/rga_preproc.cpp
   src/wvm/rknn_mobilenet.cpp
   src/wvm/reference_db.cpp
@@ -200,6 +201,7 @@ add_executable(anomaly_detection ${ANOMALY_SOURCES})
 target_link_libraries(anomaly_detection
   ${RKNN_RT_LIB}
   ${TURBOJPEG_LIB}
+  ${OpenCV_LIBS}
   pthread
 )
 
@@ -236,7 +238,7 @@ install(TARGETS anomaly_detection DESTINATION bin)
 
 # Install config files to config/ directory, substituting @TARGET_SOC@ so
 # rknn_path points to the correct model for each platform (rk3588/rk3568/rk3576).
-foreach(_cfg videowall.json health_5tv.json videowall_rtsp.json)
+foreach(_cfg videowall.json health_5tv.json videowall_rtsp.json config.json)
   configure_file(config/${_cfg} ${CMAKE_CURRENT_BINARY_DIR}/config/${_cfg} @ONLY)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/config/${_cfg} DESTINATION config)
 endforeach()

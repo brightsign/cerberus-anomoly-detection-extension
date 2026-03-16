@@ -11,6 +11,7 @@ namespace wvm {
 static const char* etype(EventType t) {
   switch (t) {
     case EventType::BLACK: return "BLACK";
+    case EventType::TV_OFF: return "TV_OFF";
     case EventType::FREEZE: return "FREEZE";
     case EventType::LAG: return "LAG";
     case EventType::STUTTER: return "STUTTER";

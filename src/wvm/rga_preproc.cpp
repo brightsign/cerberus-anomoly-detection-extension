@@ -75,54 +75,67 @@ bool RgaPreprocessor::extract_roi_rgb224(const CapturedFrame& frame, const RoiRe
   if (roi.x + roi.w > frame.width) return false;
   if (roi.y + roi.h > frame.height) return false;
 
+  // Shrink ROI inward by 6% on each side to exclude bezel, stand, and wall leakage.
+  // This improves all health features: dark_ratio, sat_mean, laplacian_var, temporal_diff.
+  const int shrink_x = std::max(1, roi.w * 6 / 100);
+  const int shrink_y = std::max(1, roi.h * 6 / 100);
+  const int inner_x = roi.x + shrink_x;
+  const int inner_y = roi.y + shrink_y;
+  const int inner_w = roi.w - 2 * shrink_x;
+  const int inner_h = roi.h - 2 * shrink_y;
+  // Use a temporary RoiRect wrapper for the inner bounds
+  struct InnerRoi { int x, y, w, h; std::string id; } inner{inner_x, inner_y, inner_w, inner_h, roi.id};
+
 #ifdef WVM_USE_RGA
-  // NOTE: You must ensure the RGA format mapping matches your camera format.
-  // This MVP assumes YUYV camera and outputs RGB888.
-  int src_format = RK_FORMAT_YUYV_422; // verify your librga defines this
-  int dst_format = RK_FORMAT_RGB_888;
+  // RGA path: requires DMA-capable (physically contiguous) buffers.
+  // wrapbuffer_virtualaddr with a plain heap vector typically fails with imcheck -3.
+  // We attempt it and fall through to CPU on failure.
+  do {
+    int src_format = RK_FORMAT_YUYV_422;
+    int dst_format = RK_FORMAT_RGB_888;
 
-  // Reduce log spam: log first 5 calls, then every 60th call
-  static uint64_t s_rga_log_ctr = 0;
-  const uint64_t c = ++s_rga_log_ctr;
-  const bool log_this = (c <= 5) || (c % 60 == 0);
-  
-  if (log_this) {
-    Logger::instance().log(LogLevel::INFO, "RGA: src=%dx%d fmt=%d roi=(%d,%d,%d,%d) dst=%dx%d fmt=%d", 
-                          frame.width, frame.height, src_format,
-                          roi.x, roi.y, roi.w, roi.h,
-                          out.w, out.h, dst_format);
-  }
+    // RGA/YUYV requires 2-pixel alignment on all ROI fields
+    int rx = inner.x & ~1;
+    int ry = inner.y & ~1;
+    int rw = (inner.w + 1) & ~1;
+    int rh = (inner.h + 1) & ~1;
+    if (rx + rw > frame.width)  rw = (frame.width  - rx) & ~1;
+    if (ry + rh > frame.height) rh = (frame.height - ry) & ~1;
 
-  rga_buffer_t src = wrapbuffer_virtualaddr((void*)frame.data.data(), frame.width, frame.height, src_format);
-  rga_buffer_t dst = wrapbuffer_virtualaddr((void*)out.rgb.data(), out.w, out.h, dst_format);
+    rga_buffer_t rga_src = wrapbuffer_virtualaddr((void*)frame.data.data(), frame.width, frame.height, src_format);
+    rga_buffer_t rga_dst = wrapbuffer_virtualaddr((void*)out.rgb.data(), out.w, out.h, dst_format);
 
-  im_rect src_rect = { roi.x, roi.y, roi.w, roi.h };
-  im_rect dst_rect = { 0, 0, out.w, out.h };
+    im_rect src_rect = { rx, ry, rw, rh };
+    im_rect dst_rect = { 0, 0, out.w, out.h };
 
-  int ret = imcheck(src, dst, src_rect, dst_rect);
-  if (ret != IM_STATUS_NOERROR) {
-    Logger::instance().log(LogLevel::ERROR, "RGA imcheck failed for %s: ret=%d (0x%x) src=%dx%d roi=(%d,%d,%d,%d) dst=%dx%d", 
-                          roi.id.c_str(), ret, ret,
-                          frame.width, frame.height,
-                          roi.x, roi.y, roi.w, roi.h,
-                          out.w, out.h);
-    return false;
-  }
+    int ret = imcheck(rga_src, rga_dst, src_rect, dst_rect);
+    if (ret != IM_STATUS_NOERROR) {
+      static bool s_rga_warned = false;
+      if (!s_rga_warned) {
+        s_rga_warned = true;
+        Logger::instance().log(LogLevel::WARN,
+          "RGA imcheck failed (ret=%d) — heap buffer not DMA-capable; using CPU fallback for all frames", ret);
+      }
+      break; // fall through to CPU path
+    }
 
-  // Use improcess for crop + resize in one operation
-  ret = improcess(src, dst, {}, src_rect, dst_rect, {}, IM_SYNC);
-  if (ret != IM_STATUS_SUCCESS) {
-    Logger::instance().log(LogLevel::ERROR, "RGA improcess failed for %s: ret=%d (0x%x)", roi.id.c_str(), ret, ret);
-    return false;
-  }
-  
-  // Compute luma stats from RGB output for anomaly detection
-  compute_luma_stats(out.rgb.data(), out.w, out.h, out.luma_mean, out.luma_var);
-  Logger::instance().log(LogLevel::DEBUG, "RGA luma stats for %s: mean=%.2f var=%.2f", 
-                        roi.id.c_str(), out.luma_mean, out.luma_var);
-  return true;
-#else
-  // CPU fallback: handle YUYV directly and downscale to RGB224 (avoid full-frame conversion).
+    ret = improcess(rga_src, rga_dst, {}, src_rect, dst_rect, {}, IM_SYNC);
+    if (ret != IM_STATUS_SUCCESS) {
+      static bool s_rga_proc_warned = false;
+      if (!s_rga_proc_warned) {
+        s_rga_proc_warned = true;
+        Logger::instance().log(LogLevel::WARN, "RGA improcess failed (ret=%d) — using CPU fallback", ret);
+      }
+      break; // fall through to CPU path
+    }
+
+    compute_luma_stats(out.rgb.data(), out.w, out.h, out.luma_mean, out.luma_var);
+    return true;
+  } while (false);
+  // RGA failed — fall through to CPU YUYV path below
+#endif
+
+  // CPU fallback: YUYV crop + nearest-neighbour resize to RGB224.
   if (frame.fmt != PixelFormat::YUYV) {
     Logger::instance().log(LogLevel::WARN, "CPU fallback: unsupported frame fmt=%d (need YUYV)", (int)frame.fmt);
     return false;
@@ -136,10 +149,10 @@ bool RgaPreprocessor::extract_roi_rgb224(const CapturedFrame& frame, const RoiRe
   int n = 0;
 
   for (int y = 0; y < out.h; ++y) {
-    int sy = roi.y + (y * roi.h) / out.h;
+    int sy = inner.y + (y * inner.h) / out.h;
     const uint8_t* row = src + sy * src_stride_bytes;
     for (int x = 0; x < out.w; ++x) {
-      int sx = roi.x + (x * roi.w) / out.w;
+      int sx = inner.x + (x * inner.w) / out.w;
       int sx_even = sx & ~1;
       const uint8_t* p = row + sx_even * 2; // 2 bytes per pixel
 
@@ -166,8 +179,7 @@ bool RgaPreprocessor::extract_roi_rgb224(const CapturedFrame& frame, const RoiRe
   out.luma_var  = (n > 0) ? (float)(m2 / n) : 0.0f;
   Logger::instance().log(LogLevel::DEBUG, "CPU luma stats for %s: mean=%.2f var=%.2f", 
                         roi.id.c_str(), out.luma_mean, out.luma_var);
-  return true; // already filled rgb + luma stats
-#endif
+  return true;
 }
 
 } // namespace wvm

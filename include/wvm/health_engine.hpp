@@ -32,16 +32,34 @@ struct TvHealthState {
   std::string tv_id;
   HealthState current_state = HealthState::OK;
   HealthState pending_state = HealthState::OK;
-  uint64_t state_enter_ts_ms = 0;   // When current_state was entered
-  uint64_t pending_enter_ts_ms = 0; // When pending_state started
-  uint64_t last_heartbeat_ts_ms = 0; // When last heartbeat was emitted
+  uint64_t state_enter_ts_ms = 0;
+  uint64_t pending_enter_ts_ms = 0;
+  uint64_t last_heartbeat_ts_ms = 0;
 
   // Latest measurements
   float luma_mean = 0.0f;
   float luma_var = 0.0f;
   float dark_ratio = 0.0f;
+  float sat_mean = 0.0f;
+  float laplacian_var = 0.0f;
+  float temporal_diff = 0.0f;
+  // EMA-smoothed features (alpha=0.2 — slow response, stable thresholding)
+  float dark_ratio_ema = -1.0f;    // -1 = uninitialised
+  float sat_mean_ema = -1.0f;
+  float laplacian_var_ema = -1.0f;
+  float temporal_diff_ema = -1.0f;
   float osd_similarity = 0.0f;
   std::string osd_label;
+
+  // TV_OFF state machine
+  bool off_active = false;
+  uint64_t off_enter_ts_ms = 0;    // when off_enter conditions first became true
+  uint64_t off_recover_ts_ms = 0;  // when off_exit conditions first became true
+
+  // Temporal diff state
+  std::vector<uint8_t> prev_gray;
+  int prev_w = 0;
+  int prev_h = 0;
 };
 
 // Health monitoring engine
@@ -62,6 +80,9 @@ public:
     float luma_mean;
     float luma_var;
     float dark_ratio;
+    float sat_mean = 0.0f;
+    float laplacian_var = 0.0f;
+    float temporal_diff = 0.0f;
     float osd_similarity;
     std::string osd_label;
     bool is_heartbeat = false;
@@ -101,11 +122,17 @@ private:
   // Calculate dark pixel ratio from RGB data
   float calculate_dark_ratio(const uint8_t* rgb, int width, int height) const;
 
+  // Multi-feature helpers for inactive-screen detection
+  float calculate_sat_mean(const uint8_t* rgb, int width, int height) const;
+  float calculate_laplacian_var(const uint8_t* rgb, int width, int height) const;
+  float calculate_temporal_diff(TvHealthState& tv, const uint8_t* rgb, int width, int height) const;
+
   // Classify OSD by nearest prototype (cosine similarity)
   void classify_osd(const float* embedding, int dim, float& best_sim, std::string& best_label) const;
 
   // Determine health state based on measurements
   HealthState determine_state(float luma_mean, float luma_var, float dark_ratio,
+                              float sat_mean, float laplacian_var, float temporal_diff,
                               float osd_sim, const std::string& osd_label) const;
 
   // Check if pending state should be promoted to current state

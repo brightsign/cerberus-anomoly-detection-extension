@@ -1,12 +1,46 @@
 #include "wvm/config.hpp"
 #include "wvm/logger.hpp"
 #include <fstream>
+#include <algorithm>
 
 // Expect nlohmann/json in your SDK; add it as a recipe dependency if needed.
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
 namespace wvm {
+
+// Detect SOC from /proc/device-tree/compatible (e.g. "rockchip,rk3568")
+// Returns "rk3588", "rk3568", "rk3576", etc., or empty string if unknown.
+static std::string detect_soc() {
+  std::ifstream f("/proc/device-tree/compatible");
+  if (!f) return "";
+  std::string content((std::istreambuf_iterator<char>(f)),
+                       std::istreambuf_iterator<char>());
+  // File contains null-separated strings like "rockchip,rk3568\0rockchip,px30\0..."
+  std::replace(content.begin(), content.end(), '\0', '\n');
+  for (const char* soc : {"rk3588", "rk3576", "rk3568", "rk3566", "rk3326"}) {
+    if (content.find(soc) != std::string::npos) return soc;
+  }
+  return "";
+}
+
+// Replace @TARGET_SOC@ in any string with the runtime-detected SOC.
+// Falls back gracefully if SOC cannot be detected (leaves placeholder visible in logs).
+static std::string resolve_soc(const std::string& s, const std::string& soc) {
+  const std::string placeholder = "@TARGET_SOC@";
+  auto pos = s.find(placeholder);
+  if (pos == std::string::npos) return s;
+  if (soc.empty()) {
+    Logger::instance().log(LogLevel::WARN,
+      "Config contains @TARGET_SOC@ but SOC could not be detected from /proc/device-tree/compatible");
+    return s;
+  }
+  std::string result = s;
+  result.replace(pos, placeholder.size(), soc);
+  Logger::instance().log(LogLevel::INFO, "Resolved @TARGET_SOC@ → %s in path: %s",
+    soc.c_str(), result.c_str());
+  return result;
+}
 
 static PixelFormat parse_pixfmt(const std::string& s) {
   if (s == "NV12") return PixelFormat::NV12;
@@ -22,6 +56,8 @@ bool load_config(const std::string& path, AppConfig& out) {
   }
   json j; ifs >> j;
 
+  const std::string soc = detect_soc();
+
   if (j.contains("device")) {
     auto d = j["device"];
     out.device.camera_device = d.value("camera_device", out.device.camera_device);
@@ -33,7 +69,7 @@ bool load_config(const std::string& path, AppConfig& out) {
 
   if (j.contains("model")) {
     auto m = j["model"];
-    out.model.rknn_path = m.value("rknn_path", out.model.rknn_path);
+    out.model.rknn_path = resolve_soc(m.value("rknn_path", out.model.rknn_path), soc);
     out.model.input_w = m.value("input_w", out.model.input_w);
     out.model.input_h = m.value("input_h", out.model.input_h);
     out.model.embedding_dim = m.value("embedding_dim", out.model.embedding_dim);
@@ -82,6 +118,28 @@ bool load_config(const std::string& path, AppConfig& out) {
       out.roi.grid.cols = g.value("cols", out.roi.grid.cols);
       out.roi.grid.count = g.value("count", out.roi.grid.count);
       out.roi.grid.order = g.value("order", out.roi.grid.order);
+    }
+
+    // Auto ROIs (OpenCV-based TV detection for real camera views)
+    if (rr.contains("auto")) {
+      auto a = rr["auto"];
+      out.roi.auto_cfg.max_tvs = a.value("max_tvs", out.roi.auto_cfg.max_tvs);
+      out.roi.auto_cfg.downscale_w = a.value("downscale_w", out.roi.auto_cfg.downscale_w);
+      out.roi.auto_cfg.downscale_h = a.value("downscale_h", out.roi.auto_cfg.downscale_h);
+      out.roi.auto_cfg.detect_interval_ms = a.value("detect_interval_ms", out.roi.auto_cfg.detect_interval_ms);
+      out.roi.auto_cfg.min_area_pct = a.value("min_area_pct", out.roi.auto_cfg.min_area_pct);
+      out.roi.auto_cfg.max_area_pct = a.value("max_area_pct", out.roi.auto_cfg.max_area_pct);
+      out.roi.auto_cfg.aspect_min = a.value("aspect_min", out.roi.auto_cfg.aspect_min);
+      out.roi.auto_cfg.aspect_max = a.value("aspect_max", out.roi.auto_cfg.aspect_max);
+      out.roi.auto_cfg.rectangularity_min = a.value("rectangularity_min", out.roi.auto_cfg.rectangularity_min);
+      out.roi.auto_cfg.commit_iou_min = a.value("commit_iou_min", out.roi.auto_cfg.commit_iou_min);
+      out.roi.auto_cfg.stable_frames = a.value("stable_frames", out.roi.auto_cfg.stable_frames);
+      out.roi.auto_cfg.save_path = a.value("save_path", out.roi.auto_cfg.save_path);
+      out.roi.auto_cfg.detect_fallback_ms = a.value("detect_fallback_ms", out.roi.auto_cfg.detect_fallback_ms);
+      out.roi.auto_cfg.max_interior_luma = a.value("max_interior_luma", out.roi.auto_cfg.max_interior_luma);
+      out.roi.auto_cfg.yolo_model_path = resolve_soc(
+        a.value("yolo_model_path", out.roi.auto_cfg.yolo_model_path), soc);
+      out.roi.auto_cfg.yolo_conf_thresh = a.value("yolo_conf_thresh", out.roi.auto_cfg.yolo_conf_thresh);
     }
   }
 
@@ -134,13 +192,23 @@ bool load_config(const std::string& path, AppConfig& out) {
     out.health.persist_recover_ms = h.value("persist_recover_ms", out.health.persist_recover_ms);
     
     out.health.off_mean = h.value("off_mean", out.health.off_mean);
-    out.health.off_var = h.value("off_var", out.health.off_var);
-    out.health.persist_off_ms = h.value("persist_off_ms", out.health.persist_off_ms);
+    out.health.off_var  = h.value("off_var",  out.health.off_var);
+    out.health.off_dark_ratio_min    = h.value("off_dark_ratio_min",    h.value("off_dark_ratio_enter", out.health.off_dark_ratio_min));
+    out.health.off_sat_mean_max      = h.value("off_sat_mean_max",      h.value("off_sat_mean_enter",   out.health.off_sat_mean_max));
+    out.health.off_laplacian_var_max = h.value("off_laplacian_var_max", h.value("off_laplacian_var_enter", out.health.off_laplacian_var_max));
+    out.health.off_temporal_diff_max = h.value("off_temporal_diff_max", h.value("off_temporal_diff_enter", out.health.off_temporal_diff_max));
+    out.health.off_dark_ratio_exit    = h.value("off_dark_ratio_exit",    out.health.off_dark_ratio_exit);
+    out.health.off_sat_mean_exit      = h.value("off_sat_mean_exit",      out.health.off_sat_mean_exit);
+    out.health.off_laplacian_var_exit = h.value("off_laplacian_var_exit", out.health.off_laplacian_var_exit);
+    out.health.off_temporal_diff_exit = h.value("off_temporal_diff_exit", out.health.off_temporal_diff_exit);
+    out.health.persist_off_ms         = h.value("persist_off_ms",         out.health.persist_off_ms);
+    out.health.persist_off_recover_ms = h.value("persist_off_recover_ms", out.health.persist_off_recover_ms);
     
     out.health.osd_mode = h.value("osd_mode", out.health.osd_mode);
     out.health.osd_prototypes_path = h.value("osd_prototypes_path", out.health.osd_prototypes_path);
     out.health.osd_sim_min = h.value("osd_sim_min", out.health.osd_sim_min);
     out.health.osd_sim_min_no_signal = h.value("osd_sim_min_no_signal", out.health.osd_sim_min_no_signal);
+    out.health.tv_off_sim_min = h.value("tv_off_sim_min", out.health.tv_off_sim_min);
     out.health.osd_sim_min_wrong_input = h.value("osd_sim_min_wrong_input", out.health.osd_sim_min_wrong_input);
     out.health.persist_no_signal_ms = h.value("persist_no_signal_ms", out.health.persist_no_signal_ms);
     out.health.persist_osd_ms = h.value("persist_osd_ms", out.health.persist_osd_ms);

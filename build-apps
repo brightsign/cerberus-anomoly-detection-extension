@@ -138,7 +138,7 @@ check_prerequisites() {
     
     # Check if models are available
     if [ ! -d "install/RK3588/model" ] && [ ! -d "install/RK3568/model" ] && [ ! -d "install/RK3576/model" ]; then
-        warn "Models not found. Compile MobileNetV2 models first:"
+        warn "Models not found. Compile models first:"
         echo ""
         echo "  ./compile-models"
         echo ""
@@ -162,7 +162,7 @@ copy_models() {
     local install_dst="install/${soc_upper}"
     
     # Models should already be in install directory from compile-models
-    if [ -f "$install_dst/model/mobilenetv2-12.rknn" ]; then
+    if [ -f "$install_dst/model/mobilenetv2-embedding-${soc}.rknn" ]; then
         log "MobileNetV2 model found for $soc_upper"
     else
         warn "MobileNetV2 model not found in $install_dst/model/"
@@ -170,6 +170,13 @@ copy_models() {
         echo "Compile models first:"
         echo "  ./compile-models"
         echo ""
+    fi
+
+    if [ -f "$install_dst/model/yolox_s_${soc}.rknn" ]; then
+        log "YOLOX-S model found for $soc_upper"
+    else
+        warn "YOLOX-S model not found in $install_dst/model/ — TV auto-detection falls back to OpenCV"
+        warn "Run ./compile-models to build it"
     fi
 }
 

@@ -38,6 +38,15 @@ bool RknnMobileNet::load(const ModelConfig& cfg) {
     return false;
   }
 
+  // Pin MobileNet to NPU Core 1 (YOLOX startup detector uses Core 0).
+  ret = rknn_set_core_mask(ctx_, RKNN_NPU_CORE_1);
+  if (ret != RKNN_SUCC) {
+    Logger::instance().log(LogLevel::WARN,
+      "RknnMobileNet: rknn_set_core_mask(Core1) failed ret=%d — using auto", ret);
+  } else {
+    Logger::instance().log(LogLevel::INFO, "RknnMobileNet: pinned to NPU Core 1");
+  }
+
   rknn_input_output_num io_num{};
   ret = rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
   if (ret != RKNN_SUCC || io_num.n_output < 1) {
