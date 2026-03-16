@@ -93,7 +93,73 @@ float HealthEngine::calculate_dark_ratio(const uint8_t* rgb, int width, int heig
   return (float)dark_count / total_pixels;
 }
 
-void HealthEngine::classify_osd(const float* embedding, int dim, 
+float HealthEngine::calculate_sat_mean(const uint8_t* rgb, int width, int height) const {
+  if (!rgb || width <= 0 || height <= 0) return 0.0f;
+  // Use brightness-weighted saturation: S_weighted = S * V
+  // For near-black pixels (V≈0), raw HSV S is undefined/noisy — a 1-unit colour
+  // difference on a pixel at luma=8 gives S≈0.6, producing spuriously high sat_mean
+  // on a powered-off panel.  Multiplying by V suppresses these dark-pixel artefacts
+  // while preserving the contribution of genuinely saturated bright pixels.
+  double sum_s = 0.0;
+  const int n = width * height;
+  for (int i = 0; i < n; ++i) {
+    float r = rgb[i*3 + 0] / 255.0f;
+    float g = rgb[i*3 + 1] / 255.0f;
+    float b = rgb[i*3 + 2] / 255.0f;
+    float maxv = std::max(r, std::max(g, b));
+    float minv = std::min(r, std::min(g, b));
+    float s = (maxv <= 1e-6f) ? 0.0f : ((maxv - minv) / maxv);
+    // Weight by brightness so dark pixels (V≈0) don't inflate the mean
+    sum_s += s * maxv * 255.0f;
+  }
+  return static_cast<float>(sum_s / n);
+}
+
+float HealthEngine::calculate_laplacian_var(const uint8_t* rgb, int width, int height) const {
+  if (!rgb || width < 3 || height < 3) return 0.0f;
+  std::vector<float> gray(width * height);
+  for (int i = 0; i < width * height; ++i) {
+    gray[i] = (299.0f * rgb[i*3] + 587.0f * rgb[i*3+1] + 114.0f * rgb[i*3+2]) / 1000.0f;
+  }
+  double sum = 0.0, sum2 = 0.0;
+  int count = 0;
+  for (int y = 1; y < height - 1; ++y) {
+    for (int x = 1; x < width - 1; ++x) {
+      int idx = y * width + x;
+      float lap = gray[idx - width] + gray[idx + width]
+                + gray[idx - 1]     + gray[idx + 1]
+                - 4.0f * gray[idx];
+      sum  += lap;
+      sum2 += lap * lap;
+      ++count;
+    }
+  }
+  if (count == 0) return 0.0f;
+  double mean = sum / count;
+  return static_cast<float>(sum2 / count - mean * mean);
+}
+
+float HealthEngine::calculate_temporal_diff(TvHealthState& tv, const uint8_t* rgb, int width, int height) const {
+  if (!rgb || width <= 0 || height <= 0) return 0.0f;
+  std::vector<uint8_t> gray(width * height);
+  for (int i = 0; i < width * height; ++i) {
+    gray[i] = static_cast<uint8_t>(
+      (299 * rgb[i*3] + 587 * rgb[i*3+1] + 114 * rgb[i*3+2]) / 1000);
+  }
+  float diff = 0.0f;
+  if (!tv.prev_gray.empty() && tv.prev_w == width && tv.prev_h == height) {
+    double sum = 0.0;
+    for (int i = 0; i < width * height; ++i)
+      sum += std::abs(int(gray[i]) - int(tv.prev_gray[i]));
+    diff = static_cast<float>(sum / (width * height));
+  }
+  tv.prev_gray = std::move(gray);
+  tv.prev_w = width;
+  tv.prev_h = height;
+  return diff;
+}
+
+void HealthEngine::classify_osd(const float* embedding, int dim,
                                  float& best_sim, std::string& best_label) const {
   best_sim = 0.0f;
   best_label = "";
@@ -135,34 +201,50 @@ void HealthEngine::classify_osd(const float* embedding, int dim,
 
 HealthState HealthEngine::determine_state(
   float luma_mean, float luma_var, float dark_ratio,
+  float sat_mean, float laplacian_var, float temporal_diff,
   float osd_sim, const std::string& osd_label) const {
-  
-  // Priority 1: TV_OFF (strictest black)
+
+  // Priority 1: TRUE BLACK — panel is near-zero luminance (OLED off / blanked)
   if (dark_ratio > 0.99f && luma_mean < cfg_.off_mean && luma_var < cfg_.off_var) {
     return HealthState::TV_OFF;
   }
 
-  // Priority 2: BLACK (dark but not necessarily off)
+  // Priority 2: BLACK — dark but not necessarily off (dark content, blanked display)
   if (dark_ratio > cfg_.black_enter_ratio && luma_var < cfg_.black_var_enter) {
     return HealthState::BLACK;
   }
 
-  // Priority 3: OSD detection (only if not black/off)
+  // Priority 3: OSD states — only if screen is clearly illuminated
   if (cfg_.osd_mode != "disabled" && !osd_label.empty()) {
-    // NO_SIGNAL uses a lower threshold: when the TV is off the camera ROI
-    // captures room background, pulling the embedding away from any prototype.
-    // Being the best-matching prototype at moderate confidence is sufficient.
     if (osd_label == "NO_SIGNAL" && osd_sim >= cfg_.osd_sim_min_no_signal) {
       return HealthState::NO_SIGNAL;
-    } else if ((osd_label == "WRONG_INPUT" || osd_label == "HDMI_MENU" ||
-                osd_label == "INPUT_MENU") && osd_sim >= cfg_.osd_sim_min_wrong_input) {
+    }
+    if ((osd_label == "WRONG_INPUT" || osd_label == "HDMI_MENU" ||
+         osd_label == "INPUT_MENU") && osd_sim >= cfg_.osd_sim_min_wrong_input) {
       return HealthState::WRONG_INPUT;
-    } else if (osd_sim >= cfg_.osd_sim_min &&
-               osd_label != "NO_SIGNAL" && osd_label != "WRONG_INPUT" &&
-               osd_label != "HDMI_MENU" && osd_label != "INPUT_MENU") {
-      // Unknown OSD at high confidence
+    }
+    if ((osd_label == "TV_OFF" || osd_label == "OFF" || osd_label == "POWER_OFF") &&
+        osd_sim >= cfg_.tv_off_sim_min &&
+        laplacian_var <= cfg_.off_laplacian_var_max * 10.0f) { // corroborate: active screen has lap>>threshold
+      return HealthState::TV_OFF;
+    }
+    if (!osd_label.empty() && osd_sim >= cfg_.osd_sim_min &&
+        osd_label != "NO_SIGNAL" && osd_label != "WRONG_INPUT" &&
+        osd_label != "HDMI_MENU" && osd_label != "INPUT_MENU" &&
+        osd_label != "TV_OFF" && osd_label != "OFF" && osd_label != "POWER_OFF") {
       return HealthState::UNKNOWN;
     }
+  }
+
+  // Priority 4: TV_OFF — inactive-screen detector for reflective powered-off panels.
+  // These panels show ambient room reflection: dark-ish, grey/unsaturated, smooth,
+  // and temporally static. All four conditions together avoid false positives from
+  // dark video content (which has higher temporal diff and/or saturation).
+  if (dark_ratio    >= cfg_.off_dark_ratio_min &&
+      sat_mean      <= cfg_.off_sat_mean_max &&
+      laplacian_var <= cfg_.off_laplacian_var_max &&
+      temporal_diff <= cfg_.off_temporal_diff_max) {
+    return HealthState::TV_OFF;
   }
 
   return HealthState::OK;
@@ -181,6 +263,12 @@ int HealthEngine::get_persistence_ms(HealthState from, HealthState to) const {
       return cfg_.persist_no_signal_ms;  // Longer: real TV-off lasts minutes, noise lasts 2-3s
     }
     return cfg_.persist_osd_ms;
+  }
+
+  // TV_OFF → OK: off_active hysteresis already required persist_off_recover_ms of
+  // sustained on-screen signal; no additional hold-off needed here.
+  if (from == HealthState::TV_OFF && to == HealthState::OK) {
+    return 0;
   }
 
   // Transitioning FROM anomaly back to OK (recovery)
@@ -291,10 +379,39 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
   tv.luma_mean = luma_mean;
   tv.luma_var = luma_var;
   tv.dark_ratio = calculate_dark_ratio(rgb_data, width, height);
+  tv.sat_mean = calculate_sat_mean(rgb_data, width, height);
+  tv.laplacian_var = calculate_laplacian_var(rgb_data, width, height);
+  tv.temporal_diff = calculate_temporal_diff(tv, rgb_data, width, height);
 
-  // Classify OSD if enabled
+  // EMA smoothing (alpha=0.2 — ~5-frame memory, reduces jitter near thresholds)
+  constexpr float EMA_A = 0.2f;
+  auto ema_init = [&](float& e, float v) { if (e < 0.0f) e = v; else e = EMA_A*v + (1.0f-EMA_A)*e; };
+  ema_init(tv.dark_ratio_ema,    tv.dark_ratio);
+  ema_init(tv.sat_mean_ema,      tv.sat_mean);
+  ema_init(tv.laplacian_var_ema, tv.laplacian_var);
+  ema_init(tv.temporal_diff_ema, tv.temporal_diff);
+
+  // Classify OSD / TV_OFF prototypes if enabled. We keep the raw best similarity
+  // for debugging, but suppress low-confidence labels so MQTT/logs do not show
+  // misleading labels such as INPUT_MENU@0.40 for a normal playing screen.
+  float best_sim = 0.0f;
+  std::string best_label;
   if (cfg_.osd_mode != "disabled" && embedding && embedding_dim > 0) {
-    classify_osd(embedding, embedding_dim, tv.osd_similarity, tv.osd_label);
+    classify_osd(embedding, embedding_dim, best_sim, best_label);
+  }
+  tv.osd_similarity = best_sim;
+  tv.osd_label.clear();
+  if (!best_label.empty()) {
+    const bool is_tv_off = (best_label == "TV_OFF" || best_label == "OFF" || best_label == "POWER_OFF");
+    const bool is_no_signal = (best_label == "NO_SIGNAL");
+    const bool is_wrong_input = (best_label == "WRONG_INPUT" || best_label == "HDMI_MENU" || best_label == "INPUT_MENU");
+
+    if ((is_tv_off && best_sim >= cfg_.tv_off_sim_min) ||
+        (is_no_signal && best_sim >= cfg_.osd_sim_min_no_signal) ||
+        (is_wrong_input && best_sim >= cfg_.osd_sim_min_wrong_input) ||
+        (!is_tv_off && !is_no_signal && !is_wrong_input && best_sim >= cfg_.osd_sim_min)) {
+      tv.osd_label = best_label;
+    }
   }
 
   // --- Prototype capture mode ---
@@ -335,9 +452,55 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
     }
   }
 
-  // Determine new state based on measurements
+  // TV_OFF hysteresis state machine (runs before determine_state so it intercepts OK/BLACK)
+  {
+    const float dr  = tv.dark_ratio_ema;
+    const float sat = tv.sat_mean_ema;
+    const float lap = tv.laplacian_var_ema;
+    const float td  = tv.temporal_diff_ema;
+
+    bool off_enter = (dr  >= cfg_.off_dark_ratio_min &&
+                      sat <= cfg_.off_sat_mean_max &&
+                      lap <= cfg_.off_laplacian_var_max &&
+                      td  <= cfg_.off_temporal_diff_max);
+    bool off_exit  = (dr  <  cfg_.off_dark_ratio_exit ||
+                      sat >  cfg_.off_sat_mean_exit ||
+                      lap >  cfg_.off_laplacian_var_exit ||
+                      td  >  cfg_.off_temporal_diff_exit);
+
+    if (!tv.off_active) {
+      if (off_enter) {
+        if (tv.off_enter_ts_ms == 0) tv.off_enter_ts_ms = ts_ms;
+        if ((ts_ms - tv.off_enter_ts_ms) >= (uint64_t)cfg_.persist_off_ms) {
+          tv.off_active = true;
+          tv.off_recover_ts_ms = 0;
+        }
+      } else {
+        tv.off_enter_ts_ms = 0;
+      }
+    } else {
+      if (off_exit) {
+        if (tv.off_recover_ts_ms == 0) tv.off_recover_ts_ms = ts_ms;
+      } else {
+        tv.off_recover_ts_ms = 0;  // still off — reset recovery clock
+      }
+      if (tv.off_recover_ts_ms != 0 &&
+          (ts_ms - tv.off_recover_ts_ms) >= (uint64_t)cfg_.persist_off_recover_ms) {
+        tv.off_active = false;
+        tv.off_enter_ts_ms = 0;
+        tv.off_recover_ts_ms = 0;
+      }
+    }
+  }
+
+  // Determine new state based on measurements.
+  // Pass best_label (raw, unsuppressed) so prototype TV_OFF detection works even
+  // when similarity is below the MQTT label-suppression threshold.
   HealthState new_state = determine_state(tv.luma_mean, tv.luma_var, tv.dark_ratio,
-                                          tv.osd_similarity, tv.osd_label);
+                                          tv.sat_mean, tv.laplacian_var, tv.temporal_diff,
+                                          tv.osd_similarity, best_label);
+  // Override with hysteresis TV_OFF if state machine says so
+  if (tv.off_active) new_state = HealthState::TV_OFF;
 
   // Check if this is the first time we're seeing this TV
   bool is_first_update = (first_seen_.find(tv_id) == first_seen_.end());
@@ -353,15 +516,19 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
     evt.luma_mean = luma_mean;
     evt.luma_var = luma_var;
     evt.dark_ratio = tv.dark_ratio;
+    evt.sat_mean = tv.sat_mean;
+    evt.laplacian_var = tv.laplacian_var;
+    evt.temporal_diff = tv.temporal_diff;
     evt.osd_similarity = tv.osd_similarity;
     evt.osd_label = tv.osd_label;
     events.push_back(evt);
 
     Logger::instance().log(LogLevel::INFO, 
-      "[%s] Initial state: UNKNOWN → %s (luma=%.1f, var=%.1f, dark=%.2f, osd=%s@%.2f)",
+      "[%s] Initial state: UNKNOWN → %s (luma=%.1f, var=%.1f, dark=%.2f sat=%.1f lap=%.0f tdiff=%.1f osd=%s@%.2f)",
       tv_id.c_str(),
       health_state_to_string(new_state),
       luma_mean, luma_var, tv.dark_ratio,
+      tv.sat_mean, tv.laplacian_var, tv.temporal_diff,
       tv.osd_label.c_str(), tv.osd_similarity);
 
     // Update TV's current state to the detected state
@@ -380,6 +547,10 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
     // threshold. Label flips between these two are normal in wide-angle camera setups
     // where the scene embedding is noisy — the sustained signal is what matters.
     // Gate on a minimum similarity (0.38) so genuinely low-signal frames still reset.
+    // Also gate on luma_var: if the tile is clearly active video (high variance) it
+    // cannot be in a TV-off/OSD state — never preserve pending in that case.
+    // Threshold: black_var_enter * 20 (default 300*20=6000). Covers physical-camera
+    // TV-off with room background (~4500 var) but not active video (~10000+ var).
     auto is_osd_anomaly_label = [](const std::string& lbl) {
       return lbl == "NO_SIGNAL" || lbl == "INPUT_MENU" ||
              lbl == "WRONG_INPUT" || lbl == "HDMI_MENU";
@@ -389,6 +560,7 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
        tv.pending_state == HealthState::WRONG_INPUT) &&
       new_state == HealthState::OK &&
       tv.osd_similarity >= 0.38f &&
+      luma_var < cfg_.black_var_enter * 20.0f &&
       is_osd_anomaly_label(tv.osd_label);
 
     if (!preserve_osd_pending) {
@@ -409,16 +581,20 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
       evt.luma_mean = luma_mean;
       evt.luma_var = luma_var;
       evt.dark_ratio = tv.dark_ratio;
+      evt.sat_mean = tv.sat_mean;
+      evt.laplacian_var = tv.laplacian_var;
+      evt.temporal_diff = tv.temporal_diff;
       evt.osd_similarity = tv.osd_similarity;
       evt.osd_label = tv.osd_label;
       events.push_back(evt);
 
       Logger::instance().log(LogLevel::INFO, 
-        "[%s] State: %s → %s (luma=%.1f, var=%.1f, dark=%.2f, osd=%s@%.2f)",
+        "[%s] State: %s → %s (luma=%.1f, var=%.1f, dark=%.2f sat=%.1f lap=%.0f tdiff=%.1f osd=%s@%.2f)",
         tv_id.c_str(),
         health_state_to_string(tv.current_state),
         health_state_to_string(new_state),
         luma_mean, luma_var, tv.dark_ratio,
+        tv.sat_mean, tv.laplacian_var, tv.temporal_diff,
         tv.osd_label.c_str(), tv.osd_similarity);
 
       tv.current_state = new_state;
@@ -438,6 +614,9 @@ std::vector<HealthEngine::HealthEvent> HealthEngine::update(
       hb.luma_mean = luma_mean;
       hb.luma_var = luma_var;
       hb.dark_ratio = tv.dark_ratio;
+      hb.sat_mean = tv.sat_mean;
+      hb.laplacian_var = tv.laplacian_var;
+      hb.temporal_diff = tv.temporal_diff;
       hb.osd_similarity = tv.osd_similarity;
       hb.osd_label = tv.osd_label;
       hb.is_heartbeat = true;

@@ -180,6 +180,18 @@ check_prerequisites() {
         error "No compiled models found. Please ensure MobileNetV2 models are compiled for each SOC."
     fi
 
+    # Warn (non-fatal) if YOLOX model is missing — ROI detection falls back to OpenCV
+    for soc in "${!SOC_PLATFORMS[@]}"; do
+        if [[ -n "$SPECIFIC_SOC" && "$SPECIFIC_SOC" != "$soc" ]]; then
+            continue
+        fi
+        local yolox_name="yolox_s_${soc,,}.rknn"
+        if [[ ! -f "install/$soc/model/$yolox_name" ]]; then
+            warn "YOLOX-S model missing for $soc ($yolox_name) — TV detection will use OpenCV fallback."
+            warn "Run: ./compile-models to build it."
+        fi
+    done
+
     # Check for required scripts
     if [[ ! -f "sh/make-extension-lvm" ]]; then
         error "make-extension-lvm script not found"
@@ -341,6 +353,15 @@ copy_models() {
             log "Copied MobileNetV2 model for $soc"
         else
             warn "MobileNetV2 model ($model_name) not found for $soc"
+        fi
+
+        # Copy YOLOX-S TV detection model (used during startup ROI detection)
+        local yolox_name="yolox_s_${soc,,}.rknn"
+        if [[ -f "$install_dir/model/$yolox_name" ]]; then
+            cp "$install_dir/model/$yolox_name" "$package_soc_dir/model/"
+            log "Copied YOLOX-S TV detection model for $soc"
+        else
+            warn "YOLOX-S model ($yolox_name) not found for $soc — TV auto-detection will fall back to OpenCV"
         fi
 
         # Copy reference database if present

@@ -419,16 +419,9 @@ step1_compile_models() {
     # Use the compile-models script for all model compilation
     if [ -f "./compile-models" ]; then
         chmod +x ./compile-models
-        
-        print_status "Compiling all AI models (RetinaFace + YOLOX)..."
-        
-        # Compile RetinaFace for all platforms
-        print_status "Compiling RetinaFace models..."
-        ./compile-models || print_warning "RetinaFace compilation may have skipped already compiled models"
-        
-        # Compile YOLOX for all platforms
-        print_status "Compiling YOLOX models for object detection..."
-        ./compile-models yolox || print_warning "YOLOX compilation may have skipped already compiled models"
+
+        print_status "Compiling all AI models (MobileNetV2 + YOLOX-S) for all platforms..."
+        ./compile-models || print_warning "Model compilation may have skipped already-compiled models"
     else
         print_warning "compile-models script not found"
         return 1

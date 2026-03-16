@@ -14,28 +14,61 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/mman.h>   // mmap for alt stack
 
 static std::atomic<bool> g_stop{false};
 
 static void on_sig(int) { g_stop = true; }
 
-// SIGSEGV/SIGABRT handler: write crash marker then exit(1) so the
-// bsext_init wrapper STOPS restarting and lets us SSH in.
-static void on_crash(int sig) {
-  // Use only async-signal-safe functions here (write, not fprintf).
-  const char* msg = "[MAIN] FATAL SIGNAL received - writing crash marker and exiting\n";
+// Crash handler — runs on a dedicated alternate stack so it still works
+// even when the main stack is corrupted (e.g. SIGSEGV from OOB array access).
+// Uses only async-signal-safe calls: write(), open(), _exit().
+// Exits with code 1 — the bsext_init wrapper stops on any code != 42,
+// so the device will NOT reboot-loop; it stays up and SSH-able.
+static void on_crash(int sig, siginfo_t* /*info*/, void* /*ctx*/) {
+  // Write to stderr (redirected to /tmp/anomaly_detection.log by wrapper)
+  const char* msg = "[MAIN] *** FATAL SIGNAL — writing crash marker, exiting cleanly ***\n";
   write(STDERR_FILENO, msg, __builtin_strlen(msg));
 
-  // Write a crash marker file so we can see what happened after reboot.
+  // Persist the signal number so we know what crashed
   int fd = open("/tmp/anomaly_crash.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd >= 0) {
-    char buf[64];
-    int n = snprintf(buf, sizeof(buf), "CRASH: signal %d\n", sig);
-    write(fd, buf, n);
+    char buf[128];
+    const char* signame = (sig == SIGSEGV) ? "SIGSEGV" :
+                          (sig == SIGABRT) ? "SIGABRT" :
+                          (sig == SIGBUS)  ? "SIGBUS"  :
+                          (sig == SIGFPE)  ? "SIGFPE"  : "UNKNOWN";
+    int n = snprintf(buf, sizeof(buf),
+                     "CRASH: signal %d (%s)\n"
+                     "Check /tmp/anomaly_detection.log for context.\n",
+                     sig, signame);
+    write(fd, buf, (size_t)n);
     close(fd);
   }
-  // Exit with 1 — wrapper breaks on exit(1) (not 42/139/134), stops restart loop.
-  _exit(1);
+  _exit(1);  // exit(1) != 42 → wrapper breaks its restart loop
+}
+
+// Install crash handlers on an alternate signal stack.
+// Must be called once from main() before any RKNN / YOLO code runs.
+static void install_crash_handlers() {
+  // Allocate an alternate stack so the handler runs even if the main
+  // stack pointer is invalid (classic SIGSEGV scenario on RK3588).
+  static char alt_stack_buf[SIGSTKSZ * 4];
+  stack_t ss{};
+  ss.ss_sp    = alt_stack_buf;
+  ss.ss_size  = sizeof(alt_stack_buf);
+  ss.ss_flags = 0;
+  sigaltstack(&ss, nullptr);
+
+  struct sigaction sa{};
+  sigemptyset(&sa.sa_mask);
+  sa.sa_sigaction = on_crash;
+  sa.sa_flags     = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+
+  sigaction(SIGSEGV, &sa, nullptr);
+  sigaction(SIGABRT, &sa, nullptr);
+  sigaction(SIGBUS,  &sa, nullptr);
+  sigaction(SIGFPE,  &sa, nullptr);
 }
 
 static bool file_exists(const std::string& path) {
@@ -150,9 +183,7 @@ int main(int argc, char** argv) {
   std::signal(SIGINT,  on_sig);
   std::signal(SIGTERM, on_sig);
   // Catch crashes so we can write a marker and stop the restart loop.
-  std::signal(SIGSEGV, on_crash);
-  std::signal(SIGABRT, on_crash);
-  std::signal(SIGBUS,  on_crash);
+  install_crash_handlers();
 
   fprintf(stderr, "[MAIN] Creating pipeline...\n");
   wvm::Pipeline pipe(cfg);

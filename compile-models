@@ -22,6 +22,7 @@ CLEAN=false
 QUIET=false
 VERBOSE=false
 BUILD_CONTAINER=false
+COMPILE_YOLOX=false
 
 # Platform configurations
 declare -A PLATFORMS=(
@@ -53,8 +54,7 @@ usage() {
     echo "  -c, --clean         Clean model directories before compilation"
     echo "  -q, --quiet         Use quieter build output"
     echo "  -v, --verbose       Enable verbose output"
-    echo "  --build-container   Build rknn_tk2 Docker container first"
-    echo "  -h, --help          Show this help message"
+    echo "  --build-container   Build rknn_tk2 Docker container first"  echo "  --with-yolox        Also compile YOLOX-S for NPU-based TV detection"    echo "  -h, --help          Show this help message"
     echo ""
     echo "Examples:"
     echo "  $0                      # Compile MobileNetV2 for all platforms"
@@ -97,6 +97,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --build-container)
             BUILD_CONTAINER=true
+            shift
+            ;;
+        --with-yolox)
+            COMPILE_YOLOX=true
             shift
             ;;
         -h|--help)
@@ -350,6 +354,95 @@ PYTHON_SCRIPT
     chmod +x "$output_dir/convert_mobilenetv2.py"
 }
 
+# Compile YOLOX-S model for a specific platform
+# Output: install/${SOC_UPPER}/model/yolox_s_${soc}.rknn
+compile_yolox() {
+    local platform=$1
+    local soc=${PLATFORMS[$platform]}
+    local soc_upper=${soc^^}
+    local yolox_dir="toolkit/rknn_model_zoo/examples/yolox"
+    local onnx_path="${yolox_dir}/model/yolox_s.onnx"
+    local output_name="yolox_s_${soc}.rknn"
+
+    log "Compiling YOLOX-S for $platform (SOC: $soc)..."
+
+    # Download YOLOX-S ONNX if not present
+    if [ ! -f "$onnx_path" ]; then
+        log "Downloading yolox_s.onnx from RKNN Model Zoo CDN..."
+        mkdir -p "${yolox_dir}/model"
+        ( cd "${yolox_dir}/model" && bash download_model.sh ) || \
+            error "Failed to download yolox_s.onnx"
+    fi
+
+    mkdir -p "toolkit/models/${soc_upper}"
+
+    # Create a minimal conversion script (no quantisation to avoid needing
+    # a YOLOX-specific calibration dataset; fp32 is fine for a startup detector)
+    cat > "toolkit/models/${soc_upper}/convert_yolox.py" << 'PYEOF'
+#!/usr/bin/env python3
+"""Convert YOLOX-S ONNX to RKNN (fp32) for NPU-based TV rectangle detection."""
+import sys
+from rknn.api import RKNN
+
+def main():
+    if len(sys.argv) != 4:
+        print(f"Usage: {sys.argv[0]} <onnx_path> <platform> <output_path>")
+        sys.exit(1)
+    onnx_path, platform, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+    rknn = RKNN(verbose=False)
+    # YOLOX expects raw uint8 RGB input; no mean/std normalisation
+    rknn.config(mean_values=[[0, 0, 0]], std_values=[[1, 1, 1]],
+                target_platform=platform)
+
+    ret = rknn.load_onnx(model=onnx_path)
+    if ret != 0:
+        print('Load ONNX failed!'); sys.exit(1)
+
+    # fp32 — no calibration dataset required for this startup-only detector
+    ret = rknn.build(do_quantization=False)
+    if ret != 0:
+        print('Build failed!'); sys.exit(1)
+
+    ret = rknn.export_rknn(output_path)
+    if ret != 0:
+        print('Export failed!'); sys.exit(1)
+
+    rknn.release()
+    print(f'YOLOX-S RKNN model saved: {output_path}')
+
+if __name__ == '__main__':
+    main()
+PYEOF
+    chmod +x "toolkit/models/${soc_upper}/convert_yolox.py"
+
+    mkdir -p "install/${soc_upper}/model"
+
+    local tmp_output="toolkit/models/${soc_upper}/${output_name}"
+
+    local docker_cmd="docker run -it --rm \
+        -v ${SCRIPT_DIR}/toolkit:/workspace \
+        rknn_tk2 \
+        /bin/bash -c \"python /workspace/models/${soc_upper}/convert_yolox.py \
+            /workspace/rknn_model_zoo/examples/yolox/model/yolox_s.onnx \
+            ${soc} \
+            /workspace/models/${soc_upper}/${output_name}\""
+
+    if [ "$QUIET" = true ]; then
+        eval "$docker_cmd > /dev/null 2>&1" || error "Failed to compile YOLOX-S for $platform"
+    else
+        eval "$docker_cmd" || error "Failed to compile YOLOX-S for $platform"
+    fi
+
+    if [ -f "$tmp_output" ]; then
+        cp "$tmp_output" "install/${soc_upper}/model/${output_name}"
+        local size=$(du -h "install/${soc_upper}/model/${output_name}" | cut -f1)
+        success "YOLOX-S compiled for $platform: install/${soc_upper}/model/${output_name} (${size})"
+    else
+        error "YOLOX compile failed — ${output_name} not found at ${tmp_output}"
+    fi
+}
+
 # Compile model for specific platform
 compile_model() {
     local platform=$1
@@ -419,33 +512,44 @@ models_already_compiled() {
         local soc_upper=${soc^^}
         local install_dir="${SCRIPT_DIR}/install/${soc_upper}/model"
         local embed_name="mobilenetv2-embedding-${soc}.rknn"
-        
-        # Check if model exists in install directory
+        local yolox_name="yolox_s_${soc}.rknn"
+
         if [ ! -f "$install_dir/${embed_name}" ]; then
-            return 1  # Not all models compiled
+            return 1  # MobileNetV2 missing
+        fi
+        if [ ! -f "$install_dir/${yolox_name}" ]; then
+            return 1  # YOLOX missing
         fi
     done
-    return 0  # All models are compiled and installed
+    return 0  # Both models present for all platforms
 }
 
-# Copy models to install directories
+# Copy models to install directories and verify both are present
 copy_models() {
     log "Verifying compiled models in install directories..."
-    
+
     for platform in "${!PLATFORMS[@]}"; do
         local soc=${PLATFORMS[$platform]}
         local soc_upper=${soc^^}
-        
+
         local embed_name="mobilenetv2-embedding-${soc}.rknn"
-        # Skip if model doesn't exist for this platform
-        if [ ! -f "install/${soc_upper}/model/${embed_name}" ]; then
-            continue
+        local yolox_name="yolox_s_${soc}.rknn"
+
+        if [ -f "install/${soc_upper}/model/${embed_name}" ]; then
+            log "Model ready: install/${soc_upper}/model/${embed_name}"
+        else
+            warn "MobileNetV2 model missing for ${soc_upper}: ${embed_name}"
         fi
-        
-        log "Model ready: install/${soc_upper}/model/${embed_name}"
-        
-        # Create model config file
-        cat > "install/${soc_upper}/model/mobilenetv2_config.json" << JSON
+
+        if [ -f "install/${soc_upper}/model/${yolox_name}" ]; then
+            log "Model ready: install/${soc_upper}/model/${yolox_name}"
+        else
+            warn "YOLOX-S model missing for ${soc_upper}: ${yolox_name}"
+        fi
+
+        # Create / update model config file (covers both models)
+        if [ -f "install/${soc_upper}/model/${embed_name}" ]; then
+            cat > "install/${soc_upper}/model/mobilenetv2_config.json" << JSON
 {
   "model_name": "MobileNetV2",
   "model_type": "embedding_extractor",
@@ -461,18 +565,18 @@ copy_models() {
   "use_case": "Reference matching via cosine similarity on embedding vectors"
 }
 JSON
-        
-        log "Created model config: install/${soc_upper}/model/mobilenetv2_config.json"
+            log "Created model config: install/${soc_upper}/model/mobilenetv2_config.json"
+        fi
     done
-    
+
     success "Models verified in install directories"
 }
 
 # Main compilation function
 main() {
-    echo "BrightSign NPU Anomaly Detection - MobileNetV2 Model Compilation"
-    echo "================================================================="
-    echo "Using Rockchip-validated MobileNetV2 from RKNN Model Zoo"
+    echo "BrightSign NPU Anomaly Detection - MobileNetV2 + YOLOX-S Model Compilation"
+    echo "============================================================================"
+    echo "MobileNetV2 (embedding) + YOLOX-S (TV detection) compiled for all SOCs"
     echo ""
     
     start_time=$(date +%s)
@@ -490,6 +594,11 @@ main() {
                 log "Removing $install_dir/${OUTPUT_NAME}..."
                 rm -f "$install_dir/${OUTPUT_NAME}"
                 rm -f "$install_dir/mobilenetv2_config.json"
+            fi
+            local yolox_name="yolox_s_${soc}.rknn"
+            if [ -f "$install_dir/${yolox_name}" ]; then
+                log "Removing $install_dir/${yolox_name}..."
+                rm -f "$install_dir/${yolox_name}"
             fi
         done
         
@@ -512,17 +621,18 @@ main() {
     
     # Check if models are already compiled and installed
     if models_already_compiled; then
-        success "MobileNetV2 models already compiled and installed in install/ directory"
+        success "All models (MobileNetV2 + YOLOX-S) already compiled and installed in install/ directory"
         echo ""
-        echo "Installed models (Rockchip-validated):"
+        echo "Installed models:"
         for platform in "${!PLATFORMS[@]}"; do
             local soc=${PLATFORMS[$platform]}
             local soc_upper=${soc^^}
             local install_dir="install/${soc_upper}/model"
-            
-            if [ -f "$install_dir/${OUTPUT_NAME}" ]; then
-                local size=$(du -h "$install_dir/${OUTPUT_NAME}" | cut -f1)
-                echo "  $platform (${soc_upper}): ✓ ${OUTPUT_NAME} (${size})"
+
+            local embed_name="mobilenetv2-embedding-${soc}.rknn"
+            local yolox_name="yolox_s_${soc}.rknn"
+            if [ -f "$install_dir/${embed_name}" ] && [ -f "$install_dir/${yolox_name}" ]; then
+                echo "  $platform (${soc_upper}): ✓ ${embed_name}  ✓ ${yolox_name}"
             fi
         done
         return 0
@@ -543,12 +653,14 @@ main() {
     
     # Determine which platforms to compile for
     if [ -n "$PLATFORM" ]; then
-        log "Compiling MobileNetV2 for $PLATFORM..."
+        log "Compiling MobileNetV2 + YOLOX-S for $PLATFORM..."
         compile_model "$PLATFORM"
+        compile_yolox "$PLATFORM"
     else
-        log "Compiling MobileNetV2 for all platforms..."
+        log "Compiling MobileNetV2 + YOLOX-S for all platforms..."
         for platform in "${!PLATFORMS[@]}"; do
             compile_model "$platform"
+            compile_yolox "$platform"
             echo ""
         done
     fi

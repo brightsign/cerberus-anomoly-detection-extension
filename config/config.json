@@ -1,0 +1,86 @@
+{
+  "_comment": "Physical camera health monitoring. Uses rect ROI — crop each TV panel individually to exclude room background, which dilutes luma and embedding metrics. Add one entry per TV in the tvs array.",
+  "device": {
+    "camera_device": "rtsp://sreetapo:Rtspstream123@192.168.0.123:554/stream1",
+    "width": 1280,
+    "height": 720,
+    "fps": 10,
+    "pixel_format": "YUYV"
+  },
+  "model": {
+    "rknn_path": "model/mobilenetv2-embedding-@TARGET_SOC@.rknn",
+    "input_w": 224,
+    "input_h": 224,
+    "embedding_dim": 1280
+  },
+  "reference": { "enabled": false },
+  "roi": {
+    "mode": "auto",
+    "_comment": "mode=auto: OpenCV detects TV rectangles automatically. On startup loads saved ROIs from save_path, then re-detects every detect_interval_ms. Switch to mode=rect and add a tvs[] array if you need fixed coordinates.",
+    "auto": {
+      "max_tvs": 2,
+      "downscale_w": 640,
+      "downscale_h": 360,
+      "detect_interval_ms": 2000,
+      "min_area_pct": 0.03,
+      "max_area_pct": 0.85,
+      "aspect_min": 1.1,
+      "aspect_max": 2.3,
+      "rectangularity_min": 0.45,
+      "commit_iou_min": 0.20,
+      "stable_frames": 1,
+      "save_path": "",
+      "detect_fallback_ms": 15000,
+      "max_interior_luma": 220,
+      "yolo_model_path": "model/yolox_s_@TARGET_SOC@.rknn",
+      "yolo_conf_thresh": 0.18
+    }
+  },
+  "anomaly": { "enabled": false },
+  "health": {
+    "enabled": true,
+    "analysis_fps": 5,
+    "dark_luma_threshold": 30,
+    "black_enter_ratio": 0.95,
+    "black_exit_ratio": 0.90,
+    "black_var_enter": 300.0,
+    "persist_black_ms": 1500,
+    "persist_recover_ms": 10000,
+    "off_mean": 6.0,
+    "off_var": 30.0,
+    "off_dark_ratio_min": 0.02,
+    "off_sat_mean_max": 15.0,
+    "off_laplacian_var_max": 150.0,
+    "off_temporal_diff_max": 2.0,
+    "off_dark_ratio_exit": 0.01,
+    "off_sat_mean_exit": 25.0,
+    "off_laplacian_var_exit": 300.0,
+    "off_temporal_diff_exit": 4.0,
+    "persist_off_ms": 3000,
+    "persist_off_recover_ms": 3000,
+    "osd_mode": "embedding_prototypes",
+    "osd_prototypes_path": "/storage/sd/osd_prototypes.json",
+    "osd_sim_min": 0.85,
+    "tv_off_sim_min": 0.75,
+    "osd_sim_min_no_signal": 0.80,
+    "osd_sim_min_wrong_input": 0.85,
+    "persist_osd_ms": 1500,
+    "persist_no_signal_ms": 8000,
+    "heartbeat_interval_ms": 10000,
+    "prototype_capture": false,
+    "prototype_labels": { "tv1": "TV_OFF" },
+    "prototype_capture_seconds": 30,
+    "prototype_output_path": "/storage/sd/osd_prototypes.json"
+  },
+  "mqtt": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 1883,
+    "topic": "videowall/health",
+    "client_id": "anomaly-monitor"
+  },
+  "logging": {
+    "level": "info",
+    "path": "/var/log/anomaly_detection.log"
+  }
+}

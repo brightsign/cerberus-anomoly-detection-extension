@@ -16,6 +16,7 @@
   "reference": { "enabled": false },
   "roi": {
     "mode": "grid",
+    "_comment": "2x3 grid = 6 tiles, count=5 uses first 5 as tv1..tv5. Grid works here because RTSP mosaic tiles fill each cell completely. For a physical camera, use rect mode to crop to the TV panel — grid 1x1 (full frame) fails when room background is visible.",
     "grid": { "rows": 2, "cols": 3, "count": 5, "order": "row_major" }
   },
   "anomaly": { "enabled": false },
@@ -34,8 +35,11 @@
     "osd_mode": "embedding_prototypes",
     "osd_prototypes_path": "/storage/sd/osd_prototypes.json",
     "osd_sim_min": 0.85,
+    "tv_off_sim_min": 0.85,
+    "osd_sim_min_no_signal": 0.80,
+    "osd_sim_min_wrong_input": 0.85,
     "persist_osd_ms": 1500,
-    "heartbeat_interval_ms": 30000,
+    "heartbeat_interval_ms": 10000,
     "prototype_capture": true,
     "prototype_labels": {
       "tv3": "NO_SIGNAL",

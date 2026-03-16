@@ -63,6 +63,7 @@ struct EmbeddingBatch {
 
 enum class EventType {
   BLACK,
+  TV_OFF,
   FREEZE,
   LAG,
   STUTTER,

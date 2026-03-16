@@ -60,11 +60,42 @@ struct RoiGridConfig {
   std::string order = "row_major";
 };
 
+struct RoiAutoConfig {
+  int max_tvs = 6;
+  int downscale_w = 640;
+  int downscale_h = 360;
+  int detect_interval_ms = 2000;
+  float min_area_pct = 0.03f;
+  float max_area_pct = 0.85f;
+  float aspect_min = 1.1f;
+  float aspect_max = 2.3f;
+  float rectangularity_min = 0.75f;
+  float commit_iou_min = 0.20f;
+  int stable_frames = 2;
+  std::string save_path = "/storage/sd/rois.json";
+  // After this many ms with no committed ROIs, fall back to full-frame as tv1.
+  // Covers TVs that extend to the frame edge (no closed contour visible).
+  // Set to 0 to disable fallback.
+  int detect_fallback_ms = 15000;
+  // Reject candidate rectangles whose interior mean luminance exceeds this value.
+  // Walls/ceilings in wide-angle/fisheye views are bright (~120-180) while TV screens
+  // are dark (~20-80 when off, or lower when showing content). Set to 0 to disable.
+  float max_interior_luma = 150.0f;
+  // Path to a YOLOX-S RKNN model for NPU-based TV detection.
+  // If set and the file exists, YOLOX is used instead of the OpenCV pipeline during
+  // the startup detection phase.  Once ROIs are committed the NPU context is freed.
+  // Supports @TARGET_SOC@ substitution (resolved at runtime).
+  // Leave empty to always use OpenCV.
+  std::string yolo_model_path = "";
+  float yolo_conf_thresh = 0.28f;  // Lower than training default to catch dark/off TVs
+};
+
 struct RoiConfig {
-  // "rect" (manual) or "grid" (auto ROIs for mosaic streams)
+  // "rect" (manual), "grid" (auto ROIs for mosaic streams), or "auto" (OpenCV TV detection)
   std::string mode = "rect";
   std::vector<RoiRect> tvs;   // used when mode=="rect"
   RoiGridConfig grid;         // used when mode=="grid"
+  RoiAutoConfig auto_cfg;     // used when mode=="auto"
 };
 
 struct HealthConfig {
@@ -81,16 +112,31 @@ struct HealthConfig {
   int persist_black_ms = 1500;
   int persist_recover_ms = 1500;
 
-  // TV_OFF detection (stricter than BLACK)
-  float off_mean = 6.0f;         // Near-zero luma
-  float off_var = 30.0f;         // Very low variance
-  int persist_off_ms = 2000;
+  // TV_OFF detection — multi-feature inactive-screen detector
+  // Legacy strict-darkness rule (OLED/near-black panels)
+  float off_mean = 6.0f;
+  float off_var  = 30.0f;
+  // Enter thresholds (all must be satisfied to enter TV_OFF)
+  float off_dark_ratio_min    = 0.38f;
+  float off_sat_mean_max      = 28.0f;
+  float off_laplacian_var_max = 360.0f;
+  float off_temporal_diff_max = 2.0f;
+  // Exit thresholds (any one sufficient to leave TV_OFF — looser than enter)
+  float off_dark_ratio_exit    = 0.30f;
+  float off_sat_mean_exit      = 35.0f;
+  float off_laplacian_var_exit = 500.0f;
+  float off_temporal_diff_exit = 4.0f;
+  int persist_off_ms         = 3000;
+  int persist_off_recover_ms = 5000;  // Must stay non-TV_OFF this long before RECOVERED
 
   // OSD detection (NO_SIGNAL, WRONG_INPUT)
   std::string osd_mode = "embedding_prototypes";  // or "disabled"
   std::string osd_prototypes_path = "/storage/sd/osd_prototypes.json";
   float osd_sim_min = 0.85f;            // Minimum similarity for unknown OSDs
-  float osd_sim_min_no_signal = 0.41f;  // NO_SIGNAL threshold: true≈0.42-0.46, noise≈0.34-0.41
+  float osd_sim_min_no_signal = 0.35f;  // Per-frame entry threshold for NO_SIGNAL detection.
+                                        // Real 8s persistence + preserve_osd_pending (>= 0.38)
+                                        // guard against false positives; don't raise this.
+  float tv_off_sim_min = 0.85f;         // Threshold for TV_OFF prototype match (for reflective powered-off panels)
   float osd_sim_min_wrong_input = 0.75f; // Threshold for WRONG_INPUT / INPUT_MENU (real match ~0.99, noise ~0.4-0.5)
   int persist_osd_ms = 1500;            // Persistence for WRONG_INPUT / unknown OSD
   int persist_no_signal_ms = 8000;      // Longer persistence for NO_SIGNAL: real TV-off lasts minutes, noise lasts 2-3s
