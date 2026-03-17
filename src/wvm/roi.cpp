@@ -58,6 +58,119 @@ struct Candidate {
   float score = 0.0f;
 };
 
+static RoiRect clamp_rect(const RoiRect& in, int W, int H) {
+  RoiRect r = in;
+  r.x = std::max(0, std::min(r.x, W - 1));
+  r.y = std::max(0, std::min(r.y, H - 1));
+  r.w = std::max(1, std::min(r.w, W - r.x));
+  r.h = std::max(1, std::min(r.h, H - r.y));
+  return r;
+}
+
+// Refine a coarse detector box by looking for strong screen-edge gradients
+// INSIDE the detector box. This keeps the final ROI per-screen instead of
+// including large amounts of wall/desk/background. The refined ROI is always
+// clamped to stay inside the original box.
+static RoiRect refine_box_by_edges(const cv::Mat& bgr, const RoiRect& in) {
+  RoiRect r = clamp_rect(in, bgr.cols, bgr.rows);
+  if (r.w < 40 || r.h < 30) return r;
+
+  cv::Rect roi(r.x, r.y, r.w, r.h);
+  cv::Mat patch = bgr(roi);
+  cv::Mat gray;
+  cv::cvtColor(patch, gray, cv::COLOR_BGR2GRAY);
+  cv::GaussianBlur(gray, gray, cv::Size(5, 5), 0.0);
+
+  cv::Mat gx, gy;
+  cv::Sobel(gray, gx, CV_32F, 1, 0, 3);
+  cv::Sobel(gray, gy, CV_32F, 0, 1, 3);
+  cv::Mat agx = cv::abs(gx), agy = cv::abs(gy);
+
+  std::vector<float> col(agx.cols, 0.0f), row(agy.rows, 0.0f);
+  for (int x = 0; x < agx.cols; ++x) {
+    cv::Scalar m = cv::mean(agx.col(x));
+    col[x] = static_cast<float>(m[0]);
+  }
+  for (int y = 0; y < agy.rows; ++y) {
+    cv::Scalar m = cv::mean(agy.row(y));
+    row[y] = static_cast<float>(m[0]);
+  }
+
+  auto argmax = [](const std::vector<float>& v, int a, int b) {
+    a = std::max(0, a); b = std::min((int)v.size() - 1, b);
+    int best = a;
+    float bestv = -1.0f;
+    for (int i = a; i <= b; ++i) {
+      if (v[i] > bestv) { bestv = v[i]; best = i; }
+    }
+    return best;
+  };
+
+  int w = r.w, h = r.h;
+  int left   = argmax(col, int(0.02f * w), int(0.35f * w));
+  int right  = argmax(col, int(0.65f * w), int(0.98f * w));
+  int top    = argmax(row, int(0.02f * h), int(0.35f * h));
+  int bottom = argmax(row, int(0.65f * h), int(0.98f * h));
+
+  int rw = right - left;
+  int rh = bottom - top;
+  if (rw > int(0.45f * w) && rh > int(0.45f * h)) {
+    RoiRect out;
+    out.x = r.x + left;
+    out.y = r.y + top;
+    out.w = rw;
+    out.h = rh;
+
+    int mx = std::max(1, int(out.w * 0.03f));
+    int my = std::max(1, int(out.h * 0.03f));
+    out.x += mx; out.y += my;
+    out.w = std::max(1, out.w - 2 * mx);
+    out.h = std::max(1, out.h - 2 * my);
+    out = clamp_rect(out, bgr.cols, bgr.rows);
+
+    // Sanity check 1: center must not drift more than 1/3 of original dimension.
+    // Sanity check 2: refined area must be at least 60% of the original clamped
+    //   area — prevents the Sobel from latching onto a bezel/content boundary
+    //   inside a large TV and cutting off half the panel.
+    int orig_cx = r.x + r.w / 2, orig_cy = r.y + r.h / 2;
+    int ref_cx  = out.x + out.w / 2, ref_cy = out.y + out.h / 2;
+    float area_ratio = static_cast<float>(out.w * out.h) / static_cast<float>(std::max(1, r.w * r.h));
+    if (std::abs(ref_cx - orig_cx) <= r.w / 3 &&
+        std::abs(ref_cy - orig_cy) <= r.h / 3 &&
+        area_ratio >= 0.60f)
+      return out;
+    // else fall through to the simple inset fallback below
+  }
+
+  // Fallback: light inward shrink of the original box.
+  RoiRect out = r;
+  int mx = std::max(1, int(out.w * 0.05f));
+  int my = std::max(1, int(out.h * 0.05f));
+  out.x += mx; out.y += my;
+  out.w = std::max(1, out.w - 2 * mx);
+  out.h = std::max(1, out.h - 2 * my);
+  return clamp_rect(out, bgr.cols, bgr.rows);
+}
+
+// Returns true if every ROI in old_rois has a unique match in new_rois with IoU >= min_iou.
+static bool all_rois_match(const std::vector<RoiRect>& old_rois,
+                           const std::vector<RoiRect>& new_rois,
+                           float min_iou) {
+  std::vector<bool> used(new_rois.size(), false);
+  for (const auto& old_r : old_rois) {
+    float best_iou = 0.0f;
+    int best_j = -1;
+    for (size_t j = 0; j < new_rois.size(); ++j) {
+      if (used[j]) continue;
+      float iou = compute_iou(old_r, new_rois[j]);
+      if (iou > best_iou) { best_iou = iou; best_j = (int)j; }
+    }
+    if (best_j < 0 || best_iou < min_iou) return false;
+    used[best_j] = true;
+  }
+  return true;
+}
+
 static float rectangularity(const std::vector<cv::Point>& contour, const cv::Rect& r) {
   double area = cv::contourArea(contour);
   double rect_area = static_cast<double>(r.area());
@@ -201,6 +314,7 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
     // and room geometry false-positives that trip up the OpenCV heuristic.
     auto rois = yolo_detector_->detect(frame);
     const float yolo_fa = static_cast<float>(frame.width * frame.height);
+    cv::Mat bgr_full = frame_to_bgr(frame);
     int rejected_area = 0, rejected_aspect = 0;
     for (size_t ri = 0; ri < rois.size(); ++ri) {
       const auto& r = rois[ri];
@@ -222,7 +336,6 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
       // min_interior_luma: rejects dark/off computer monitors that YOLOX also
       //   classifies as "tv" but that should not be monitored.
       if (cfg_.auto_cfg.max_interior_luma > 0.0f || cfg_.auto_cfg.min_interior_luma > 0.0f) {
-        cv::Mat bgr_full = frame_to_bgr(frame);
         if (!bgr_full.empty()) {
           int sx = std::max(0, r.x);
           int sy = std::max(0, r.y);
@@ -249,13 +362,21 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
         }
       }
 
-      float aspect_penalty = std::fabs(aspect - 16.0f / 9.0f);
-      float score          = (area_pct * 4.0f) - (aspect_penalty * 0.5f);
+      // Score: prefer larger boxes that are higher in the frame.
+      // We do NOT penalise aspect ratio here — flat panels come in many ratios
+      // (portrait monitors, wide TVs, fisheye-distorted screens) and the
+      // aspect filter above already rejects truly invalid shapes.
+      // The y-position penalty pushes floor/cable regions (bottom of fisheye
+      // frame) below real TV detections so they are dropped when max_tvs is hit.
+      float center_y_frac = (r.y + r.h * 0.5f) / static_cast<float>(std::max(1, frame.height));
+      float score         = (area_pct * 4.0f) - (center_y_frac * 0.15f);
 
       // Wide-box splitter: if a single detected box is far too wide to be one
-      // TV (e.g. three adjacent monitors merged into one detection), split it
-      // at vertical luma valleys inside the box.  Threshold: aspect > 2.4.
-      if (aspect > 2.4f) {
+      // TV (e.g. two adjacent monitors merged into one detection), split it
+      // at vertical luma valleys inside the box.  Threshold: aspect > 1.8
+      // (just above a single 16:9 panel at 1.78). Only treats as split if
+      // at least one valid sub-box is actually produced.
+      if (aspect > 1.8f) {
         cv::Mat bgr_split = frame_to_bgr(frame);
         bool split_done = false;
         if (!bgr_split.empty()) {
@@ -299,6 +420,7 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
               std::vector<int> splits = {0};
               for (int v : valleys) splits.push_back(v);
               splits.push_back(sw);
+              int sub_added = 0;
               for (size_t si = 0; si + 1 < splits.size(); ++si) {
                 int sub_x = sx + splits[si];
                 int sub_w = splits[si+1] - splits[si];
@@ -306,26 +428,45 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
                 float sub_area = static_cast<float>(sub_w * sh) / yolo_fa;
                 float sub_asp  = static_cast<float>(sub_w) / std::max(1, sh);
                 if (sub_area < cfg_.auto_cfg.min_area_pct) continue;
-                if (sub_asp < cfg_.auto_cfg.aspect_min || sub_asp > cfg_.auto_cfg.aspect_max) continue;
+                if (sub_asp > cfg_.auto_cfg.aspect_max) continue;
                 RoiRect sub; sub.x = sub_x; sub.y = sy; sub.w = sub_w; sub.h = sh;
-                float sub_penalty = std::fabs(sub_asp - 16.0f / 9.0f);
-                float sub_score   = (sub_area * 4.0f) - (sub_penalty * 0.5f);
+                // Only refine with Sobel for smaller split sub-boxes.
+                if (!bgr_full.empty() && sub_area <= 0.08f) sub = refine_box_by_edges(bgr_full, sub);
+                float sub_cy_frac = (sy + sh * 0.5f) / static_cast<float>(std::max(1, bgr_split.rows));
+                float sub_score   = (sub_area * 4.0f) - (sub_cy_frac * 0.15f);
                 candidates.push_back({sub, sub_score});
+                ++sub_added;
                 Logger::instance().log(LogLevel::INFO,
-                  "[ROI YOLO]   split sub-ROI: x=%d y=%d w=%d h=%d asp=%.2f score=%.3f",
-                  sub_x, sy, sub_w, sh, sub_asp, sub_score);
+                  "[ROI YOLO]   split sub-ROI: x=%d y=%d w=%d h=%d asp=%.2f score=%.3f refined=[%d,%d,%d,%d]",
+                  sub_x, sy, sub_w, sh, sub_asp, sub_score, sub.x, sub.y, sub.w, sub.h);
               }
-              split_done = true;
+              // Only skip the merged box if we successfully produced sub-boxes.
+              split_done = (sub_added > 0);
             }
           }
         }
         if (split_done) continue;  // don't push the merged box
       }
 
-      candidates.push_back({r, score});
+      RoiRect refined = r;
+      // Only apply Sobel refinement for smaller boxes — for large boxes
+      // (area_pct > 0.08) YOLOX is already well-localised and bright content
+      // inside the screen produces stronger Sobel edges than the bezel edge,
+      // causing the box to shrink to the content region rather than the panel.
+      if (!bgr_full.empty() && area_pct <= 0.08f) refined = refine_box_by_edges(bgr_full, r);
+      else if (area_pct > 0.08f) {
+        // Large box: just apply 5% inset directly.
+        refined = clamp_rect(r, frame.width, frame.height);
+        int mx = std::max(1, int(refined.w * 0.05f));
+        int my = std::max(1, int(refined.h * 0.05f));
+        refined.x += mx; refined.y += my;
+        refined.w = std::max(1, refined.w - 2 * mx);
+        refined.h = std::max(1, refined.h - 2 * my);
+      }
+      candidates.push_back({refined, score});
       Logger::instance().log(LogLevel::INFO,
-        "[ROI YOLO]   accepted: box=[x=%d y=%d w=%d h=%d] area_pct=%.3f aspect=%.2f score=%.3f",
-        r.x, r.y, r.w, r.h, area_pct, aspect, score);
+        "[ROI YOLO]   accepted: box=[x=%d y=%d w=%d h=%d] refined=[x=%d y=%d w=%d h=%d] area_pct=%.3f aspect=%.2f score=%.3f",
+        r.x, r.y, r.w, r.h, refined.x, refined.y, refined.w, refined.h, area_pct, aspect, score);
     }
     Logger::instance().log(LogLevel::INFO,
       "[ROI YOLO] Filter: %zu from YOLOX -> %zu accepted (%d rejected area, %d rejected aspect) (frame %dx%d)",
@@ -462,7 +603,7 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
   for (const auto& c : candidates) {
     bool overlaps = false;
     for (const auto& s : selected) {
-      if (compute_iou(c.roi, s) > 0.35f) {
+      if (compute_iou(c.roi, s) > 0.10f) {
         overlaps = true;
         break;
       }
@@ -539,28 +680,98 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
     pending_auto_count_ = 1;
   }
 
-  if (pending_auto_count_ < std::max(1, cfg_.auto_cfg.stable_frames)) {
-    Logger::instance().log(LogLevel::INFO, "ROI auto: found %zu candidate screens, waiting for stability (%d/%d)",
-                           labeled.size(), pending_auto_count_, std::max(1, cfg_.auto_cfg.stable_frames));
-    return false;
+  // For the initial acquisition, require stable_frames consecutive consistent
+  // detections before committing — avoids locking onto a transient noisy frame.
+  if (!auto_locked_ || tvs_.empty()) {
+    if (pending_auto_count_ < std::max(1, cfg_.auto_cfg.stable_frames)) {
+      Logger::instance().log(LogLevel::INFO, "ROI auto: found %zu candidate screens, waiting for stability (%d/%d)",
+                             labeled.size(), pending_auto_count_, std::max(1, cfg_.auto_cfg.stable_frames));
+      return false;
+    }
+    // Initial commit.
+    tvs_ = pending_auto_rois_;
+    frame_w_ = frame.width;
+    frame_h_ = frame.height;
+    auto_locked_ = true;
+    last_good_auto_commit_ts_ = frame.ts_ms;
+    save_auto_rois();
+    Logger::instance().log(LogLevel::INFO, "ROI auto: initial commit of %zu TVs", tvs_.size());
+    for (size_t i = 0; i < std::min<size_t>(tvs_.size(), 8); ++i) {
+      const auto& r = tvs_[i];
+      Logger::instance().log(LogLevel::INFO, "  ROI auto %s: x=%d y=%d w=%d h=%d", r.id.c_str(), r.x, r.y, r.w, r.h);
+    }
+    return true;
   }
 
-  tvs_ = pending_auto_rois_;
-  frame_w_ = frame.width;
-  frame_h_ = frame.height;
-  save_auto_rois();
-
-  // Do NOT release YOLOX here — it runs on NPU Core 0, MobileNet on Core 1,
-  // so they are fully independent. Keeping YOLOX alive allows it to re-run at
-  // detect_fallback_ms intervals and self-correct any bad initial ROI commits
-  // (e.g. a wall/door detectedas a TV on first frame).
-
-  Logger::instance().log(LogLevel::INFO, "ROI auto: committed %zu TVs", tvs_.size());
-  for (size_t i = 0; i < std::min<size_t>(tvs_.size(), 8); ++i) {
-    const auto& r = tvs_[i];
-    Logger::instance().log(LogLevel::INFO, "  ROI auto %s: x=%d y=%d w=%d h=%d", r.id.c_str(), r.x, r.y, r.w, r.h);
+  // Continuous YOLOX tracking: update each committed ROI independently.
+  //
+  // For every committed TV, if YOLOX found a matching candidate (IoU >=
+  // commit_iou_min), update that ROI to the new refined position.
+  // TVs that YOLOX did NOT detect this cycle (off, dark, or occluded) keep
+  // their last committed position — MobileNetV2 continues to analyse them
+  // at the frozen crop so health state is not lost when a TV turns off.
+  {
+    std::vector<bool> new_used(pending_auto_rois_.size(), false);
+    bool any_updated = false;
+    for (size_t j = 0; j < tvs_.size(); ++j) {
+      float best_iou = 0.0f;
+      int   best_i   = -1;
+      for (size_t i = 0; i < pending_auto_rois_.size(); ++i) {
+        if (new_used[i]) continue;
+        float iou = compute_iou(tvs_[j], pending_auto_rois_[i]);
+        if (iou > best_iou) { best_iou = iou; best_i = (int)i; }
+      }
+      if (best_i >= 0 && best_iou >= cfg_.auto_cfg.commit_iou_min) {
+        std::string saved_id = tvs_[j].id;
+        tvs_[j]    = pending_auto_rois_[best_i];
+        tvs_[j].id = saved_id;
+        new_used[best_i] = true;
+        any_updated = true;
+        Logger::instance().log(LogLevel::DEBUG,
+          "ROI auto: YOLOX updated %s → x=%d y=%d w=%d h=%d (iou=%.2f)",
+          tvs_[j].id.c_str(), tvs_[j].x, tvs_[j].y, tvs_[j].w, tvs_[j].h, best_iou);
+      } else {
+        Logger::instance().log(LogLevel::DEBUG,
+          "ROI auto: YOLOX no match for %s this cycle — keeping last position",
+          tvs_[j].id.c_str());
+      }
+    }
+    // If YOLOX found more TVs than currently committed (e.g. initially locked
+    // with 2 TVs but the large TV is now consistently visible), add them up to
+    // max_tvs.  Re-sort left→right and assign stable ids afterwards.
+    if ((int)tvs_.size() < desired) {
+      for (size_t i = 0; i < pending_auto_rois_.size() && (int)tvs_.size() < desired; ++i) {
+        if (new_used[i]) continue;
+        // Assign the next unused tvN id.
+        std::set<std::string> existing_ids;
+        for (const auto& t : tvs_) existing_ids.insert(t.id);
+        int idx = 1;
+        while (existing_ids.count("tv" + std::to_string(idx))) ++idx;
+        RoiRect new_tv = pending_auto_rois_[i];
+        new_tv.id = "tv" + std::to_string(idx);
+        tvs_.push_back(new_tv);
+        new_used[i] = true;
+        any_updated = true;
+        Logger::instance().log(LogLevel::INFO,
+          "ROI auto: YOLOX added new TV %s x=%d y=%d w=%d h=%d",
+          new_tv.id.c_str(), new_tv.x, new_tv.y, new_tv.w, new_tv.h);
+      }
+      // Re-sort committed ROIs left→right and renumber ids sequentially.
+      if (any_updated) {
+        std::sort(tvs_.begin(), tvs_.end(), [](const RoiRect& a, const RoiRect& b) {
+          return (a.x + a.w / 2) < (b.x + b.w / 2);
+        });
+        for (size_t j = 0; j < tvs_.size(); ++j)
+          tvs_[j].id = "tv" + std::to_string(j + 1);
+      }
+    }
+    if (any_updated) {
+      last_good_auto_commit_ts_ = frame.ts_ms;
+      save_auto_rois();
+    }
+    return any_updated;
   }
-  return true;
+  return false;
 }
 
 bool RoiManager::update_from_frame(const CapturedFrame& frame) {

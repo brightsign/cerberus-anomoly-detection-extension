@@ -194,6 +194,7 @@ bool load_config(const std::string& path, AppConfig& out) {
     
     out.health.off_mean = h.value("off_mean", out.health.off_mean);
     out.health.off_var  = h.value("off_var",  out.health.off_var);
+    out.health.off_luma_mean_max     = h.value("off_luma_mean_max",     out.health.off_luma_mean_max);
     out.health.off_dark_ratio_min    = h.value("off_dark_ratio_min",    h.value("off_dark_ratio_enter", out.health.off_dark_ratio_min));
     out.health.off_sat_mean_max      = h.value("off_sat_mean_max",      h.value("off_sat_mean_enter",   out.health.off_sat_mean_max));
     out.health.off_laplacian_var_max = h.value("off_laplacian_var_max", h.value("off_laplacian_var_enter", out.health.off_laplacian_var_max));

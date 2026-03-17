@@ -30,6 +30,8 @@ private:
   uint64_t first_auto_frame_ts_ms_ = 0;  // time of first auto-detect attempt
   std::vector<RoiRect> pending_auto_rois_;
   int pending_auto_count_ = 0;
+  bool auto_locked_ = false;              // true after first successful commit
+  uint64_t last_good_auto_commit_ts_ = 0; // ts of last IoU-validated commit
 
   bool load_saved_auto_rois();
   void save_auto_rois() const;

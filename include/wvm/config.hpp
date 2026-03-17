@@ -118,6 +118,7 @@ struct HealthConfig {
   float off_mean = 6.0f;
   float off_var  = 30.0f;
   // Enter thresholds (all must be satisfied to enter TV_OFF)
+  float off_luma_mean_max     = 200.0f; // Max ROI mean luma; 200 = no gate; lower to reject bright walls
   float off_dark_ratio_min    = 0.38f;
   float off_sat_mean_max      = 28.0f;
   float off_laplacian_var_max = 360.0f;

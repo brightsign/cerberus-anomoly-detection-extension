@@ -14,6 +14,14 @@
 
 BSEXT_DIR="$(dirname "$(realpath "$0")")"
 BSEXT="${BSEXT_DIR}/bsext_init"
+# If run from /storage/sd/ (not from extension dir), find bsext_init at install path
+if [ ! -x "$BSEXT" ]; then
+    BSEXT="/var/volatile/bsext/ext_npu_anomaly/bsext_init"
+fi
+if [ ! -x "$BSEXT" ]; then
+    echo "ERROR: bsext_init not found. Run this script from the extension directory or /storage/sd/." >&2
+    exit 1
+fi
 CONFIG="/storage/sd/configs/config.json"
 PROTO_OUTPUT="/storage/sd/osd_prototypes.json"
 CAPTURE_SECONDS=40
@@ -73,6 +81,13 @@ sed -i "s/\"prototype_capture\"[[:space:]]*:[[:space:]]*false/\"prototype_captur
 # prototype_capture_seconds
 sed -i "s/\"prototype_capture_seconds\"[[:space:]]*:[[:space:]]*[0-9]*/\"prototype_capture_seconds\": ${CAPTURE_SECONDS}/" "$CONFIG"
 
+# Lower yolo_conf_thresh for capture — off TVs score lower than on TVs.
+# Save original value so we can restore it.
+ORIG_CONF=$(grep '"yolo_conf_thresh"' "$CONFIG" | grep -oE '[0-9]+\.[0-9]+' | head -1)
+if [ -z "$ORIG_CONF" ]; then ORIG_CONF="0.18"; fi
+sed -i "s/\"yolo_conf_thresh\"[[:space:]]*:[[:space:]]*[0-9.][0-9.]*/\"yolo_conf_thresh\": 0.12/" "$CONFIG"
+echo "  Lowered yolo_conf_thresh: ${ORIG_CONF} -> 0.12 (restoring after capture)"
+
 # prototype_labels — build JSON dynamically for any TV count
 LABELS_JSON="{"
 i=1
@@ -130,9 +145,10 @@ fi
 
 # ── Step 6: Patch config — disable capture, restart ─────────────────────────
 
-echo "[7/7] Disabling prototype_capture and restarting in normal mode..."
+echo "[7/7] Disabling prototype_capture, restoring conf_thresh, restarting in normal mode..."
 sed -i "s/\"prototype_capture\"[[:space:]]*:[[:space:]]*true/\"prototype_capture\": false/" "$CONFIG"
-echo "  prototype_capture=false"
+sed -i "s/\"yolo_conf_thresh\"[[:space:]]*:[[:space:]]*0\.12/\"yolo_conf_thresh\": ${ORIG_CONF}/" "$CONFIG"
+echo "  prototype_capture=false, yolo_conf_thresh restored to ${ORIG_CONF}"
 
 "$BSEXT" start
 
