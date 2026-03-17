@@ -274,6 +274,12 @@ copy_binaries() {
             warn "image-stream-server not found in $source_dir"
         fi
 
+        # Copy capture helper script (installed by cmake alongside the binary)
+        if [[ -f "$source_dir/capture_tv_off_prototype.sh" ]]; then
+            cp "$source_dir/capture_tv_off_prototype.sh" "$package_soc_dir/"
+            chmod +x "$package_soc_dir/capture_tv_off_prototype.sh"
+        fi
+
         # Copy mosquitto broker binary and utilities
         mkdir -p "$package_soc_dir/bin"
         if [[ -f "$install_dir/bin/mosquitto" ]]; then
@@ -582,6 +588,11 @@ copy_extension_scripts() {
     # Copy uninstall script
     if [[ -f "sh/uninstall.sh" ]]; then
         cp sh/uninstall.sh staging/ && chmod +x staging/uninstall.sh
+    fi
+
+    # Copy TV_OFF prototype capture helper
+    if [[ -f "capture_tv_off_prototype.sh" ]]; then
+        cp capture_tv_off_prototype.sh staging/ && chmod +x staging/capture_tv_off_prototype.sh
     fi
 
     success "Extension scripts added"

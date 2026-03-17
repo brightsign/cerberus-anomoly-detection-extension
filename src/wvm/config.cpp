@@ -137,6 +137,7 @@ bool load_config(const std::string& path, AppConfig& out) {
       out.roi.auto_cfg.save_path = a.value("save_path", out.roi.auto_cfg.save_path);
       out.roi.auto_cfg.detect_fallback_ms = a.value("detect_fallback_ms", out.roi.auto_cfg.detect_fallback_ms);
       out.roi.auto_cfg.max_interior_luma = a.value("max_interior_luma", out.roi.auto_cfg.max_interior_luma);
+      out.roi.auto_cfg.min_interior_luma = a.value("min_interior_luma", out.roi.auto_cfg.min_interior_luma);
       out.roi.auto_cfg.yolo_model_path = resolve_soc(
         a.value("yolo_model_path", out.roi.auto_cfg.yolo_model_path), soc);
       out.roi.auto_cfg.yolo_conf_thresh = a.value("yolo_conf_thresh", out.roi.auto_cfg.yolo_conf_thresh);
