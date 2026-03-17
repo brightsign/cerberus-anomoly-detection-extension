@@ -17,6 +17,8 @@
 #include <thread>
 #include <memory>
 #include <fstream>
+#include <mutex>
+#include <unordered_map>
 
 namespace wvm {
 
@@ -75,6 +77,10 @@ private:
   void analysis_loop();
   void mqtt_loop();
   
+  // Latest health state per TV for debug annotation
+  std::mutex latest_health_mutex_;
+  std::unordered_map<std::string, HealthState> latest_health_state_;
+
   // Frame streaming helper
   void save_frame_composite(const CapturedFrame& f);
 };
