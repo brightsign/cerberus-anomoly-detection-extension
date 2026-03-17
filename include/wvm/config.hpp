@@ -81,6 +81,7 @@ struct RoiAutoConfig {
   // Walls/ceilings in wide-angle/fisheye views are bright (~120-180) while TV screens
   // are dark (~20-80 when off, or lower when showing content). Set to 0 to disable.
   float max_interior_luma = 150.0f;
+  float min_interior_luma = 0.0f;   // reject screens darker than this (filters off monitors); 0=disabled
   // Path to a YOLOX-S RKNN model for NPU-based TV detection.
   // If set and the file exists, YOLOX is used instead of the OpenCV pipeline during
   // the startup detection phase.  Once ROIs are committed the NPU context is freed.

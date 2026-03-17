@@ -225,6 +225,7 @@ HealthState HealthEngine::determine_state(
     }
     if ((osd_label == "TV_OFF" || osd_label == "OFF" || osd_label == "POWER_OFF") &&
         osd_sim >= cfg_.tv_off_sim_min &&
+        luma_mean < 80.0f &&             // an ON screen with bright content is not TV_OFF
         laplacian_var <= cfg_.off_laplacian_var_max * 10.0f) { // corroborate: active screen has lap>>threshold
       return HealthState::TV_OFF;
     }
@@ -240,7 +241,10 @@ HealthState HealthEngine::determine_state(
   // These panels show ambient room reflection: dark-ish, grey/unsaturated, smooth,
   // and temporally static. All four conditions together avoid false positives from
   // dark video content (which has higher temporal diff and/or saturation).
-  if (dark_ratio    >= cfg_.off_dark_ratio_min &&
+  // Precondition: luma < 90 blocks bright wall/background patches (luma ~100+)
+  // while allowing real off-screen detection (luma typically 40-70).
+  if (luma_mean < 90.0f &&
+      dark_ratio    >= cfg_.off_dark_ratio_min &&
       sat_mean      <= cfg_.off_sat_mean_max &&
       laplacian_var <= cfg_.off_laplacian_var_max &&
       temporal_diff <= cfg_.off_temporal_diff_max) {

@@ -18,7 +18,7 @@
     "mode": "auto",
     "_comment": "mode=auto: OpenCV detects TV rectangles automatically. On startup loads saved ROIs from save_path, then re-detects every detect_interval_ms. Switch to mode=rect and add a tvs[] array if you need fixed coordinates.",
     "auto": {
-      "max_tvs": 2,
+      "max_tvs": 3,
       "downscale_w": 640,
       "downscale_h": 360,
       "detect_interval_ms": 2000,
@@ -32,8 +32,9 @@
       "save_path": "",
       "detect_fallback_ms": 15000,
       "max_interior_luma": 220,
+      "min_interior_luma": 30,
       "yolo_model_path": "model/yolox_s_@TARGET_SOC@.rknn",
-      "yolo_conf_thresh": 0.18
+      "yolo_conf_thresh": 0.35
     }
   },
   "anomaly": { "enabled": false },

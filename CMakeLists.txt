@@ -377,6 +377,13 @@ add_dependencies(anomaly_detection copy_models)
 set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/${SOC_DIR})
 install(TARGETS anomaly_detection DESTINATION ./)
 
+# Install capture helper script so it ends up in the extension squashfs
+install(FILES ${CMAKE_SOURCE_DIR}/capture_tv_off_prototype.sh
+        DESTINATION ./
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                    GROUP_READ GROUP_EXECUTE
+                    WORLD_READ WORLD_EXECUTE)
+
 # Install the image stream server binary from the copied location
 install(FILES ${CMAKE_BINARY_DIR}/image-stream-server
         DESTINATION ./

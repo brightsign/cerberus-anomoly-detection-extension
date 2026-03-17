@@ -191,8 +191,10 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
   last_auto_detect_ts_ms_ = frame.ts_ms;
 
   std::vector<Candidate> candidates;
+  bool used_yolo = false;
 
   if (yolo_detector_ && yolo_detector_->is_loaded()) {
+    used_yolo = true;
     // ── YOLO NPU path ──────────────────────────────────────────────────────────
     // Semantically correct: YOLOX was trained on COCO "tv" (class 63) which
     // covers flat-panel monitors and televisions.  Robust to fisheye distortion
@@ -215,8 +217,111 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
         continue;
       }
 
+      // Interior brightness checks — filter impossible candidates before scoring.
+      // max_interior_luma: rejects bright walls/ceilings (OpenCV path uses this too).
+      // min_interior_luma: rejects dark/off computer monitors that YOLOX also
+      //   classifies as "tv" but that should not be monitored.
+      if (cfg_.auto_cfg.max_interior_luma > 0.0f || cfg_.auto_cfg.min_interior_luma > 0.0f) {
+        cv::Mat bgr_full = frame_to_bgr(frame);
+        if (!bgr_full.empty()) {
+          int sx = std::max(0, r.x);
+          int sy = std::max(0, r.y);
+          int sw = std::min(r.w, bgr_full.cols - sx);
+          int sh = std::min(r.h, bgr_full.rows - sy);
+          if (sw > 0 && sh > 0) {
+            cv::Scalar mean_val = cv::mean(bgr_full(cv::Rect(sx, sy, sw, sh)));
+            float mean_luma = 0.299f * mean_val[2] + 0.587f * mean_val[1] + 0.114f * mean_val[0];
+            if (cfg_.auto_cfg.max_interior_luma > 0.0f && mean_luma > cfg_.auto_cfg.max_interior_luma) {
+              Logger::instance().log(LogLevel::DEBUG,
+                "[ROI YOLO] Rejected: luma=%.1f > max=%.1f (wall/ceiling?)",
+                mean_luma, cfg_.auto_cfg.max_interior_luma);
+              ++rejected_area;
+              continue;
+            }
+            if (cfg_.auto_cfg.min_interior_luma > 0.0f && mean_luma < cfg_.auto_cfg.min_interior_luma) {
+              Logger::instance().log(LogLevel::DEBUG,
+                "[ROI YOLO] Rejected: luma=%.1f < min=%.1f (screen off/dark monitor?)",
+                mean_luma, cfg_.auto_cfg.min_interior_luma);
+              ++rejected_area;
+              continue;
+            }
+          }
+        }
+      }
+
       float aspect_penalty = std::fabs(aspect - 16.0f / 9.0f);
       float score          = (area_pct * 4.0f) - (aspect_penalty * 0.5f);
+
+      // Wide-box splitter: if a single detected box is far too wide to be one
+      // TV (e.g. three adjacent monitors merged into one detection), split it
+      // at vertical luma valleys inside the box.  Threshold: aspect > 2.4.
+      if (aspect > 2.4f) {
+        cv::Mat bgr_split = frame_to_bgr(frame);
+        bool split_done = false;
+        if (!bgr_split.empty()) {
+          int sx = std::max(0, r.x), sy = std::max(0, r.y);
+          int sw = std::min(r.w, bgr_split.cols - sx);
+          int sh = std::min(r.h, bgr_split.rows - sy);
+          if (sw > 20 && sh > 10) {
+            cv::Mat roi_bgr = bgr_split(cv::Rect(sx, sy, sw, sh));
+            cv::Mat gray;
+            cv::cvtColor(roi_bgr, gray, cv::COLOR_BGR2GRAY);
+            // Column mean luma profile
+            std::vector<float> col_luma(sw);
+            for (int x = 0; x < sw; ++x) {
+              double s = 0;
+              for (int y = 0; y < sh; ++y) s += gray.at<uint8_t>(y, x);
+              col_luma[x] = static_cast<float>(s / sh);
+            }
+            // Smooth profile (5-pixel boxcar)
+            std::vector<float> smooth(sw, 0.f);
+            for (int x = 2; x < sw - 2; ++x)
+              smooth[x] = (col_luma[x-2]+col_luma[x-1]+col_luma[x]+col_luma[x+1]+col_luma[x+2]) / 5.f;
+            // Find local minima that are darker than 60% of the mean
+            float mean_luma_col = 0;
+            for (float v : smooth) mean_luma_col += v;
+            mean_luma_col /= sw;
+            float valley_thresh = mean_luma_col * 0.60f;
+            std::vector<int> valleys;
+            int min_gap = sw / (cfg_.auto_cfg.max_tvs + 1);
+            for (int x = 5; x < sw - 5; ++x) {
+              if (smooth[x] < valley_thresh &&
+                  smooth[x] <= smooth[x-1] && smooth[x] <= smooth[x+1]) {
+                if (valleys.empty() || (x - valleys.back()) > min_gap)
+                  valleys.push_back(x);
+              }
+            }
+            if (!valleys.empty()) {
+              Logger::instance().log(LogLevel::INFO,
+                "[ROI YOLO] Wide box (aspect=%.2f) — splitting at %zu valley(s)",
+                aspect, valleys.size());
+              // Build split x-boundaries
+              std::vector<int> splits = {0};
+              for (int v : valleys) splits.push_back(v);
+              splits.push_back(sw);
+              for (size_t si = 0; si + 1 < splits.size(); ++si) {
+                int sub_x = sx + splits[si];
+                int sub_w = splits[si+1] - splits[si];
+                if (sub_w < 20) continue;
+                float sub_area = static_cast<float>(sub_w * sh) / yolo_fa;
+                float sub_asp  = static_cast<float>(sub_w) / std::max(1, sh);
+                if (sub_area < cfg_.auto_cfg.min_area_pct) continue;
+                if (sub_asp < cfg_.auto_cfg.aspect_min || sub_asp > cfg_.auto_cfg.aspect_max) continue;
+                RoiRect sub; sub.x = sub_x; sub.y = sy; sub.w = sub_w; sub.h = sh;
+                float sub_penalty = std::fabs(sub_asp - 16.0f / 9.0f);
+                float sub_score   = (sub_area * 4.0f) - (sub_penalty * 0.5f);
+                candidates.push_back({sub, sub_score});
+                Logger::instance().log(LogLevel::INFO,
+                  "[ROI YOLO]   split sub-ROI: x=%d y=%d w=%d h=%d asp=%.2f score=%.3f",
+                  sub_x, sy, sub_w, sh, sub_asp, sub_score);
+              }
+              split_done = true;
+            }
+          }
+        }
+        if (split_done) continue;  // don't push the merged box
+      }
+
       candidates.push_back({r, score});
       Logger::instance().log(LogLevel::INFO,
         "[ROI YOLO]   accepted: box=[x=%d y=%d w=%d h=%d] area_pct=%.3f aspect=%.2f score=%.3f",
@@ -373,9 +478,12 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
     return a.x < b.x;
   });
 
-  // Never downgrade below the committed count when we already have max_tvs.
-  // OpenCV/YOLOX can temporarily miss dark screens; keep the good commit.
-  if ((int)selected.size() < (int)tvs_.size() && (int)tvs_.size() >= desired) {
+  // Never downgrade below the committed count when OpenCV ran — it can
+  // temporarily miss dark/off screens that YOLOX found before.
+  // When YOLOX is the detector, let it freely update ROIs so it can
+  // self-correct any bad initial commits (wall/door false positives).
+  if (!used_yolo &&
+      (int)selected.size() < (int)tvs_.size() && (int)tvs_.size() >= desired) {
     Logger::instance().log(LogLevel::INFO,
       "ROI auto: detected %zu TV(s) < committed %zu (max_tvs=%d) — keeping existing ROIs",
       selected.size(), tvs_.size(), desired);
@@ -442,13 +550,10 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
   frame_h_ = frame.height;
   save_auto_rois();
 
-  // Release YOLO NPU context after ROI commit.
-  // Frees NPU bandwidth for steady-state MobileNet embedding inference.
-  if (yolo_detector_) {
-    yolo_detector_->release();
-    Logger::instance().log(LogLevel::INFO,
-      "YoloTvDetector: NPU context released — ROI detection complete");
-  }
+  // Do NOT release YOLOX here — it runs on NPU Core 0, MobileNet on Core 1,
+  // so they are fully independent. Keeping YOLOX alive allows it to re-run at
+  // detect_fallback_ms intervals and self-correct any bad initial ROI commits
+  // (e.g. a wall/door detectedas a TV on first frame).
 
   Logger::instance().log(LogLevel::INFO, "ROI auto: committed %zu TVs", tvs_.size());
   for (size_t i = 0; i < std::min<size_t>(tvs_.size(), 8); ++i) {
