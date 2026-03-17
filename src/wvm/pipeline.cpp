@@ -3,11 +3,13 @@
 #include "wvm/gst_rtsp_capture.hpp"
 #include "wvm/logger.hpp"
 #include <chrono>
-#include <turbojpeg.h>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 
 
 namespace wvm {
@@ -527,6 +529,11 @@ void Pipeline::analysis_loop() {
           (int)e.vec.size()
         );
 
+        if (const auto* st = health_->get_state(e.tv_id)) {
+          std::lock_guard<std::mutex> lk(latest_health_mutex_);
+          latest_health_state_[e.tv_id] = st->current_state;
+        }
+
         if (batch_count <= 5) {
           fprintf(stderr, "[ANALYSIS] Health returned %zu events for tv_id=%s\n",
             health_evs.size(), e.tv_id.c_str());
@@ -547,7 +554,7 @@ void Pipeline::analysis_loop() {
           } else {
             switch (hev.new_state) {
               case HealthState::TV_OFF:
-                ev.type = EventType::TV_OFF;
+                ev.type = EventType::BLACK;  // Reuse BLACK for TV_OFF (most severe)
                 break;
               case HealthState::BLACK:
                 ev.type = EventType::BLACK;
@@ -555,13 +562,13 @@ void Pipeline::analysis_loop() {
               case HealthState::NO_SIGNAL:
               case HealthState::WRONG_INPUT:
               case HealthState::UNKNOWN:
-                ev.type = EventType::MISMATCH;
+                ev.type = EventType::MISMATCH;  // Reuse MISMATCH for OSD detection
                 break;
               case HealthState::OK:
                 ev.type = EventType::RECOVERED;
                 break;
               default:
-                continue;
+                continue;  // Skip unknown states
             }
           }
 
@@ -578,7 +585,11 @@ void Pipeline::analysis_loop() {
             hev.laplacian_var,
             hev.temporal_diff,
             hev.osd_similarity,
-            hev.osd_label.c_str(),
+            // Only expose osd_label when it actually drove the final state.
+            (hev.new_state == HealthState::NO_SIGNAL ||
+             hev.new_state == HealthState::WRONG_INPUT ||
+             hev.new_state == HealthState::TV_OFF)
+              ? hev.osd_label.c_str() : "",
             hev.is_heartbeat ? "true" : "false"
           );
           ev.details = details;
@@ -630,86 +641,124 @@ void Pipeline::mqtt_loop() {
 void Pipeline::save_frame_composite(const CapturedFrame& f) {
   static int frame_save_count = 0;
   frame_save_count++;
-  
+
   if (frame_save_count == 1) {
-    Logger::instance().log(LogLevel::INFO, "Frame streaming: First composite frame saved to /tmp/output.jpg");
+    Logger::instance().log(LogLevel::INFO, "Frame streaming: First annotated frame saved to /tmp/output.jpg");
   } else if (frame_save_count % 50 == 0) {
-    Logger::instance().log(LogLevel::INFO, "Frame streaming: %d composite frames saved (latest: /tmp/output.jpg)", frame_save_count);
+    Logger::instance().log(LogLevel::INFO, "Frame streaming: %d annotated frames saved (latest: /tmp/output.jpg)", frame_save_count);
   }
 
   const auto& tvs = roi_.tvs();
-  if (tvs.empty()) return;
+  if (tvs.empty() || f.data.empty()) return;
 
-  // Thumbnail size per ROI (scale down to fit all ROIs side-by-side)
-  const int THUMB_W = 320;
-  const int THUMB_H = 240;
-  const int n = (int)tvs.size();
-  const int composite_w = THUMB_W * n;
-  const int composite_h = THUMB_H;
+  // Convert incoming YUYV full frame to BGR once.
+  cv::Mat yuyv(f.height, f.width, CV_8UC2, const_cast<uint8_t*>(f.data.data()));
+  cv::Mat bgr;
+  cv::cvtColor(yuyv, bgr, cv::COLOR_YUV2BGR_YUY2);
+  if (bgr.empty()) return;
 
-  std::vector<uint8_t> rgb_composite(composite_w * composite_h * 3, 0);
+  cv::Mat annotated = bgr.clone();
 
-  // YUYV ROI → downscaled RGB thumbnail at dest_x offset in composite
-  auto render_roi = [&](const RoiRect& roi, int dest_x) {
-    const int src_stride = f.width * 2;
-    // Clamp ROI to frame bounds
-    int sx = std::max(0, roi.x);
-    int sy = std::max(0, roi.y);
-    int sw = std::min(roi.w, f.width  - sx);
-    int sh = std::min(roi.h, f.height - sy);
-    if (sw <= 0 || sh <= 0) return;
+  std::unordered_map<std::string, HealthState> state_snapshot;
+  {
+    std::lock_guard<std::mutex> lk(latest_health_mutex_);
+    state_snapshot = latest_health_state_;
+  }
 
-    for (int ty = 0; ty < THUMB_H; ++ty) {
-      // Source row (nearest-neighbour scale)
-      int src_y = sy + (ty * sh / THUMB_H);
-      const uint8_t* yuyv_row = f.data.data() + src_y * src_stride;
-      uint8_t* out_row = rgb_composite.data() + ty * composite_w * 3 + dest_x * 3;
-
-      for (int tx = 0; tx < THUMB_W; ++tx) {
-        int src_x = sx + (tx * sw / THUMB_W);
-        // Align to even x for YUYV pair
-        int pair_x = src_x & ~1;
-        const uint8_t* p = yuyv_row + pair_x * 2;
-
-        int Y  = (src_x & 1) ? p[2] : p[0];
-        int U  = p[1];
-        int V  = p[3];
-        int c  = Y - 16;
-        int d  = U - 128;
-        int e  = V - 128;
-
-        out_row[tx * 3 + 0] = (uint8_t)std::min(std::max((298*c + 409*e + 128) >> 8, 0), 255);
-        out_row[tx * 3 + 1] = (uint8_t)std::min(std::max((298*c - 100*d - 208*e + 128) >> 8, 0), 255);
-        out_row[tx * 3 + 2] = (uint8_t)std::min(std::max((298*c + 516*d + 128) >> 8, 0), 255);
-      }
+  auto color_for_state = [](HealthState st) -> cv::Scalar {
+    switch (st) {
+      case HealthState::OK:          return cv::Scalar(0, 200, 0);       // green
+      case HealthState::TV_OFF:      return cv::Scalar(0, 0, 255);       // red
+      case HealthState::BLACK:       return cv::Scalar(0, 165, 255);     // orange
+      case HealthState::NO_SIGNAL:   return cv::Scalar(0, 255, 255);     // yellow
+      case HealthState::WRONG_INPUT: return cv::Scalar(255, 0, 255);     // magenta
+      case HealthState::UNKNOWN:     return cv::Scalar(188, 92, 214);    // purple
+      default:                       return cv::Scalar(188, 92, 214);
     }
   };
 
-  for (int i = 0; i < n; ++i) {
-    render_roi(tvs[i], i * THUMB_W);
+  auto clamp_roi = [&](const RoiRect& roi) -> cv::Rect {
+    int x = std::max(0, roi.x);
+    int y = std::max(0, roi.y);
+    int w = std::min(roi.w, f.width - x);
+    int h = std::min(roi.h, f.height - y);
+    if (w <= 0 || h <= 0) return cv::Rect();
+    return cv::Rect(x, y, w, h);
+  };
+
+  // Draw full-frame annotations.
+  for (const auto& roi : tvs) {
+    cv::Rect r = clamp_roi(roi);
+    if (r.width <= 0 || r.height <= 0) continue;
+
+    HealthState st = HealthState::UNKNOWN;
+    auto it = state_snapshot.find(roi.id);
+    if (it != state_snapshot.end()) st = it->second;
+    cv::Scalar color = color_for_state(st);
+
+    cv::rectangle(annotated, r, color, 5);
+
+    const std::string label = roi.id + " " + std::string(health_state_to_string(st));
+    int baseline = 0;
+    cv::Size text_sz = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.7, 2, &baseline);
+    int tx = r.x;
+    int ty = std::max(0, r.y - 8);
+    cv::Rect bg(tx, std::max(0, ty - text_sz.height - 8), std::min(text_sz.width + 10, annotated.cols - tx), text_sz.height + 10);
+    cv::rectangle(annotated, bg, color, cv::FILLED);
+    cv::putText(annotated, label, cv::Point(tx + 5, bg.y + bg.height - 6),
+                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2, cv::LINE_AA);
   }
 
-  // Compress to JPEG using TurboJPEG
-  tjhandle tj = tjInitCompress();
-  if (!tj) return;
+  // Build a high-resolution ROI strip for quick operator viewing.
+  const int STRIP_H = 360;
+  const int GAP = 8;
+  std::vector<cv::Mat> roi_views;
+  std::vector<std::string> roi_labels;
+  std::vector<cv::Scalar> roi_colors;
+  roi_views.reserve(tvs.size());
+  roi_labels.reserve(tvs.size());
+  roi_colors.reserve(tvs.size());
 
-  unsigned char* jpeg_buf = nullptr;
-  unsigned long jpeg_size = 0;
+  int total_w = GAP;
+  for (const auto& roi : tvs) {
+    cv::Rect r = clamp_roi(roi);
+    if (r.width <= 0 || r.height <= 0) continue;
+    cv::Mat crop = bgr(r).clone();
+    if (crop.empty()) continue;
 
-  int ret = tjCompress2(tj, rgb_composite.data(), composite_w, 0, composite_h, TJPF_RGB,
-                        &jpeg_buf, &jpeg_size, TJSAMP_422, 85, TJFLAG_FASTDCT);
+    int out_w = std::max(1, (crop.cols * STRIP_H) / std::max(1, crop.rows));
+    cv::Mat resized;
+    cv::resize(crop, resized, cv::Size(out_w, STRIP_H), 0, 0, cv::INTER_AREA);
+    roi_views.push_back(std::move(resized));
 
-  if (ret == 0 && jpeg_buf) {
-    FILE* fp = std::fopen("/tmp/output.jpg.tmp", "wb");
-    if (fp) {
-      std::fwrite(jpeg_buf, 1, jpeg_size, fp);
-      std::fclose(fp);
-      std::rename("/tmp/output.jpg.tmp", "/tmp/output.jpg");
-    }
-    tjFree(jpeg_buf);
+    HealthState st = HealthState::UNKNOWN;
+    auto it = state_snapshot.find(roi.id);
+    if (it != state_snapshot.end()) st = it->second;
+    roi_labels.push_back(roi.id + " " + std::string(health_state_to_string(st)));
+    roi_colors.push_back(color_for_state(st));
+    total_w += out_w + GAP;
   }
 
-  tjDestroy(tj);
+  cv::Mat strip(STRIP_H + 48, std::max(total_w, 32), CV_8UC3, cv::Scalar(240, 240, 240));
+  int x = GAP;
+  for (size_t i = 0; i < roi_views.size(); ++i) {
+    cv::Mat& view = roi_views[i];
+    cv::Rect dst(x, 40, view.cols, view.rows);
+    view.copyTo(strip(dst));
+    cv::rectangle(strip, dst, roi_colors[i], 6);
+    cv::putText(strip, roi_labels[i], cv::Point(x, 28), cv::FONT_HERSHEY_SIMPLEX,
+                0.7, roi_colors[i], 2, cv::LINE_AA);
+    x += view.cols + GAP;
+  }
+
+  std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 95};
+
+  if (cv::imwrite("/tmp/output.tmp.jpg", annotated, params)) {
+    std::rename("/tmp/output.tmp.jpg", "/tmp/output.jpg");
+  }
+  if (!strip.empty() && cv::imwrite("/tmp/output_strip.tmp.jpg", strip, params)) {
+    std::rename("/tmp/output_strip.tmp.jpg", "/tmp/output_strip.jpg");
+  }
 }
 
 } // namespace wvm

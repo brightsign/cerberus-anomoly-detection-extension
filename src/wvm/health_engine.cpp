@@ -243,7 +243,7 @@ HealthState HealthEngine::determine_state(
   // dark video content (which has higher temporal diff and/or saturation).
   // Precondition: luma < 90 blocks bright wall/background patches (luma ~100+)
   // while allowing real off-screen detection (luma typically 40-70).
-  if (luma_mean < 90.0f &&
+  if (luma_mean < cfg_.off_luma_mean_max &&
       dark_ratio    >= cfg_.off_dark_ratio_min &&
       sat_mean      <= cfg_.off_sat_mean_max &&
       laplacian_var <= cfg_.off_laplacian_var_max &&
