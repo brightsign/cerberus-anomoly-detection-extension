@@ -722,14 +722,33 @@ bool RoiManager::update_auto_rois(const CapturedFrame& frame) {
         if (iou > best_iou) { best_iou = iou; best_i = (int)i; }
       }
       if (best_i >= 0 && best_iou >= cfg_.auto_cfg.commit_iou_min) {
-        std::string saved_id = tvs_[j].id;
-        tvs_[j]    = pending_auto_rois_[best_i];
-        tvs_[j].id = saved_id;
-        new_used[best_i] = true;
-        any_updated = true;
-        Logger::instance().log(LogLevel::DEBUG,
-          "ROI auto: YOLOX updated %s → x=%d y=%d w=%d h=%d (iou=%.2f)",
-          tvs_[j].id.c_str(), tvs_[j].x, tvs_[j].y, tvs_[j].w, tvs_[j].h, best_iou);
+        const RoiRect& cand = pending_auto_rois_[best_i];
+        // Guard against gradual position drift: only accept if the candidate
+        // center has not moved more than 1/3 of the committed box dimension
+        // AND the candidate area is at least 50% of the committed area.
+        // This prevents overnight lighting changes from slowly walking the
+        // ROI off the screen.
+        int old_cx = tvs_[j].x + tvs_[j].w / 2, old_cy = tvs_[j].y + tvs_[j].h / 2;
+        int new_cx = cand.x + cand.w / 2,        new_cy = cand.y + cand.h / 2;
+        float area_ratio = static_cast<float>(cand.w * cand.h) /
+                           static_cast<float>(std::max(1, tvs_[j].w * tvs_[j].h));
+        bool center_ok = (std::abs(new_cx - old_cx) <= tvs_[j].w / 3 &&
+                          std::abs(new_cy - old_cy) <= tvs_[j].h / 3);
+        bool area_ok   = (area_ratio >= 0.50f);
+        if (center_ok && area_ok) {
+          std::string saved_id = tvs_[j].id;
+          tvs_[j]    = cand;
+          tvs_[j].id = saved_id;
+          new_used[best_i] = true;
+          any_updated = true;
+          Logger::instance().log(LogLevel::DEBUG,
+            "ROI auto: YOLOX updated %s → x=%d y=%d w=%d h=%d (iou=%.2f)",
+            tvs_[j].id.c_str(), tvs_[j].x, tvs_[j].y, tvs_[j].w, tvs_[j].h, best_iou);
+        } else {
+          Logger::instance().log(LogLevel::INFO,
+            "ROI auto: rejected drift update for %s — center_ok=%d area_ratio=%.2f (keeping locked position)",
+            tvs_[j].id.c_str(), (int)center_ok, area_ratio);
+        }
       } else {
         Logger::instance().log(LogLevel::DEBUG,
           "ROI auto: YOLOX no match for %s this cycle — keeping last position",
