@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cerberus Zone Picker</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #15181d; color: #e6e9ee; }
+  header { padding: 10px 16px; background: #1d222a; border-bottom: 1px solid #2b313b; }
+  header h1 { margin: 0; font-size: 16px; }
+  header .hint { color: #9aa4b2; font-size: 12px; margin-top: 2px; }
+  main { display: flex; gap: 16px; padding: 16px; align-items: flex-start; flex-wrap: wrap; }
+  #stage { position: relative; line-height: 0; max-width: 100%; }
+  #img { display: block; max-width: 100%; height: auto; background: #000; }
+  #overlay { position: absolute; left: 0; top: 0; cursor: crosshair; }
+  .panel { flex: 1 1 320px; min-width: 300px; max-width: 520px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  input[type=text] { flex: 1 1 200px; background: #0f1216; color: #e6e9ee; border: 1px solid #333b47; border-radius: 6px; padding: 6px 8px; }
+  button { background: #2a3340; color: #e6e9ee; border: 1px solid #3a4452; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  button:hover { background: #343f4e; }
+  button.primary { background: #2d6cdf; border-color: #2d6cdf; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #262c35; }
+  th { color: #9aa4b2; font-weight: 600; }
+  pre { background: #0f1216; border: 1px solid #262c35; border-radius: 6px; padding: 10px; overflow: auto; white-space: pre-wrap; font-size: 12px; }
+  .warn { color: #ffb454; }
+  .muted { color: #9aa4b2; }
+  .pill { background: #0f1216; border: 1px solid #333b47; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+  .steps { font-size: 13px; color: #c9d1dc; }
+  code { background: #0f1216; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cerberus Zone Picker</h1>
+  <div class="hint">Drag boxes over each screen in the camera view. Boxes are numbered <code>tv1..tvN</code> top&rarr;bottom, left&rarr;right. Output is the <code>roi</code> block in absolute camera pixels.</div>
+</header>
+
+<main>
+  <div id="stage">
+    <img id="img" alt="camera frame">
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <input id="url" type="text" placeholder="http://PLAYER:20200/image">
+      <button id="load">Load URL</button>
+      <label class="pill"><input id="live" type="checkbox"> live</label>
+    </div>
+    <div class="row">
+      <input id="file" type="file" accept="image/*">
+    </div>
+    <div class="row">
+      <span class="pill">frame: <span id="dim">-</span></span>
+      <span class="pill">zones: <span id="count">0</span></span>
+      <button id="clear">Clear all</button>
+    </div>
+
+    <table id="tbl">
+      <thead><tr><th>id</th><th>x</th><th>y</th><th>w</th><th>h</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="row">
+      <button id="copyRoi" class="primary">Copy roi block</button>
+      <input id="base" type="file" accept=".json,application/json" title="optional: load your current config.json">
+      <button id="dlConfig">Download config.json</button>
+    </div>
+    <pre id="out">(draw some boxes)</pre>
+
+    <div class="steps">
+      <b>Apply on the player:</b>
+      <ol>
+        <li>Save the config to <code>/storage/sd/configs/config.json</code> (scp it, or use <b>Download config.json</b> after loading your current config).</li>
+        <li>Restart: <code>/var/volatile/bsext/ext_npu_anomaly/bsext_init restart</code>.</li>
+      </ol>
+      <div class="muted">Boxes must lie fully inside the frame &mdash; out-of-bounds ROIs are dropped by the capture crop.</div>
+    </div>
+  </div>
+</main>
+
+<script src="zone-picker.logic.js"></script>
+<script>
+(function () {
+  'use strict';
+  var ZP = window.ZonePicker;
+  var img = document.getElementById('img');
+  var overlay = document.getElementById('overlay');
+  var ctx = overlay.getContext('2d');
+  var dimEl = document.getElementById('dim');
+  var countEl = document.getElementById('count');
+  var outEl = document.getElementById('out');
+  var tbody = document.querySelector('#tbl tbody');
+
+  // Boxes are stored in NATURAL (camera-frame) pixels so ids/output are stable
+  // regardless of how large the image is displayed.
+  var boxes = [];
+  var baseConfig = null;      // optional loaded config.json to merge into
+  var liveTimer = null;
+  var drag = null;            // { x0,y0,x1,y1 } in displayed-canvas px
+
+  function naturalW() { return img.naturalWidth || 0; }
+  function naturalH() { return img.naturalHeight || 0; }
+
+  function fit() {
+    overlay.width = img.clientWidth;
+    overlay.height = img.clientHeight;
+    overlay.style.width = img.clientWidth + 'px';
+    overlay.style.height = img.clientHeight + 'px';
+    redraw();
+  }
+
+  // natural(frame) px -> displayed px
+  function toDisplay(b) {
+    var sx = img.clientWidth / (naturalW() || 1);
+    var sy = img.clientHeight / (naturalH() || 1);
+    return { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy };
+  }
+
+  function redraw() {
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    var tagged = ZP.buildRoiConfig(boxes).tvs;        // ordered + id'd for display
+    ctx.lineWidth = 2;
+    ctx.font = '13px system-ui, sans-serif';
+    tagged.forEach(function (t) {
+      var d = toDisplay(t);
+      ctx.strokeStyle = '#38d39f';
+      ctx.strokeRect(d.x, d.y, d.w, d.h);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(d.x, d.y, 34, 16);
+      ctx.fillStyle = '#38d39f';
+      ctx.fillText(t.id, d.x + 3, d.y + 12);
+    });
+    if (drag) {
+      ctx.strokeStyle = '#ffd166';
+      ctx.strokeRect(drag.x0, drag.y0, drag.x1 - drag.x0, drag.y1 - drag.y0);
+    }
+    refreshPanel(tagged);
+  }
+
+  function refreshPanel(tagged) {
+    countEl.textContent = tagged.length;
+    dimEl.textContent = naturalW() && naturalH() ? (naturalW() + ' x ' + naturalH()) : '-';
+    tbody.innerHTML = '';
+    tagged.forEach(function (t, i) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + t.id + '</td><td>' + t.x + '</td><td>' + t.y +
+                     '</td><td>' + t.w + '</td><td>' + t.h + '</td>';
+      var td = document.createElement('td');
+      var del = document.createElement('button');
+      del.textContent = 'x';
+      del.onclick = function () { boxes.splice(i, 1); redraw(); };
+      td.appendChild(del); tr.appendChild(td);
+      tbody.appendChild(tr);
+    });
+    var roi = ZP.buildRoiConfig(boxes);
+    outEl.textContent = tagged.length
+      ? '"roi": ' + JSON.stringify(roi, null, 2)
+      : '(draw some boxes)';
+  }
+
+  // --- drawing ---
+  function canvasPos(ev) {
+    var r = overlay.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  }
+  overlay.addEventListener('mousedown', function (ev) {
+    var p = canvasPos(ev); drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+  });
+  overlay.addEventListener('mousemove', function (ev) {
+    if (!drag) return; var p = canvasPos(ev); drag.x1 = p.x; drag.y1 = p.y; redraw();
+  });
+  window.addEventListener('mouseup', function () {
+    if (!drag) return;
+    var dx = Math.min(drag.x0, drag.x1), dy = Math.min(drag.y0, drag.y1);
+    var dw = Math.abs(drag.x1 - drag.x0), dh = Math.abs(drag.y1 - drag.y0);
+    drag = null;
+    if (dw < 6 || dh < 6) { redraw(); return; }     // ignore stray clicks
+    // displayed px -> natural(frame) px, then clamp to the frame.
+    var sx = (naturalW() || 1) / img.clientWidth;
+    var sy = (naturalH() || 1) / img.clientHeight;
+    var frame = ZP.scaleBox({ x: dx, y: dy, w: dw, h: dh }, sx, sy);
+    var c = ZP.clampToFrame(frame, naturalW(), naturalH());
+    boxes.push({ x: c.x, y: c.y, w: c.w, h: c.h });
+    redraw();
+  });
+
+  // --- image sources ---
+  function setSrc(u) { img.src = u; }
+  img.addEventListener('load', fit);
+  window.addEventListener('resize', fit);
+
+  document.getElementById('load').onclick = function () {
+    var u = document.getElementById('url').value.trim();
+    if (u) setSrc(u);
+  };
+  document.getElementById('file').onchange = function (ev) {
+    var f = ev.target.files[0]; if (f) setSrc(URL.createObjectURL(f));
+  };
+  document.getElementById('live').onchange = function (ev) {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    if (ev.target.checked) {
+      var base = document.getElementById('url').value.trim();
+      if (!base) { ev.target.checked = false; return; }
+      liveTimer = setInterval(function () {
+        setSrc(base + (base.indexOf('?') < 0 ? '?' : '&') + '_t=' + Date.now());
+      }, 700);
+    }
+  };
+  document.getElementById('clear').onclick = function () { boxes = []; redraw(); };
+
+  // --- output ---
+  document.getElementById('copyRoi').onclick = function () {
+    var text = '"roi": ' + JSON.stringify(ZP.buildRoiConfig(boxes), null, 2);
+    navigator.clipboard && navigator.clipboard.writeText(text);
+  };
+  document.getElementById('base').onchange = function (ev) {
+    var f = ev.target.files[0]; if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function () { try { baseConfig = JSON.parse(rd.result); } catch (e) { baseConfig = null; alert('Not valid JSON'); } };
+    rd.readAsText(f);
+  };
+  document.getElementById('dlConfig').onclick = function () {
+    var cfg = baseConfig ? JSON.parse(JSON.stringify(baseConfig)) : {};
+    cfg.roi = ZP.buildRoiConfig(boxes);
+    var blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'config.json'; a.click();
+  };
+
+  // --- query-param bootstrap (url=...&live=1), set by zone-picker.sh ---
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var u = q.get('url');
+    if (u) { document.getElementById('url').value = u; setSrc(u); }
+    if (q.get('live') === '1') {
+      var cb = document.getElementById('live'); cb.checked = true;
+      cb.dispatchEvent(new Event('change'));
+    }
+  })();
+})();
+</script>
+</body>
+</html>
