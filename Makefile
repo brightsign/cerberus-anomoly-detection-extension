@@ -48,6 +48,23 @@ prep:                ## Fetch RKNN headers + runtime into include/ (needs networ
 build-models:        ## Compile the RKNN models per SoC into the shared cache (needs docker + rknn_tk2 + cache/toolkit)
 	bash scripts/build-models.sh $(MODELS_DIR) $(SOC_LIST)
 
+build-engine: fetch-sdk prep  ## Cross-compile + install for each SoC in SOC_LIST against the cache SDK
+	@for soc in $(SOC_LIST); do \
+		socl=$$(echo $$soc | tr A-Z a-z); \
+		bdir=build_$$socl; \
+		echo "== building $$soc in $$bdir =="; \
+		mkdir -p $$bdir; \
+		bash -c 'source "$(SDK_ENV)" && \
+			cmake -S . -B '"$$bdir"' -DOECORE_TARGET_SYSROOT="$$OECORE_TARGET_SYSROOT" -DTARGET_SOC='"$$socl"' -DCMAKE_BUILD_TYPE=Release && \
+			$(MAKE) -C '"$$bdir"' -j$$(nproc) && \
+			$(MAKE) -C '"$$bdir"' install' || exit 1; \
+	done
+
+package: build-engine build-models  ## Stage all SoCs and produce the dev + LVM extension zips
+	./package
+
+build: package       ## Full build: fetch SDK, prep, compile models, cross-compile, package
+
 run-tests:           ## Run host unit tests (no cross SDK needed)
 	bash test/cache_sh_test.sh
 	bash test/fetch_sdk_test.sh
@@ -61,4 +78,4 @@ clean:               ## Remove build artifacts (build_*/ install/ staging/ zips 
 	rm -rf build_* install staging *.zip
 	bash scripts/prep.sh clean 2>/dev/null || true
 
-.PHONY: help cache-info fetch-sdk prep build-models run-tests test clean
+.PHONY: help cache-info fetch-sdk prep build-models build-engine package build run-tests test clean

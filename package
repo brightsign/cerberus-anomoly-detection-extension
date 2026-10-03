@@ -7,6 +7,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Compiled models live in the shared build cache (scripts/build-models.sh writes
+# <cache>/models/<SOC>/), not in install/. Resolve MODELS_DIR via the single
+# source of truth.
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/scripts/lib/cache.sh"   # sets MODELS_DIR (and CACHE_DIR, SDK_*)
+
 # Cleanup on exit
 cleanup_on_exit() {
     local exit_code=$?
@@ -136,7 +142,7 @@ check_prerequisites() {
             continue
         fi
         
-        local build_dir="build_${SOC_PLATFORMS[$soc],,}"
+        local build_dir="build_${soc,,}"
         if [[ -f "$build_dir/anomaly_detection" ]]; then
             found_binaries=true
             break
@@ -159,7 +165,7 @@ check_prerequisites() {
     fi
 
     if [[ "$found_binaries" != "true" ]]; then
-        error "No compiled binaries found. Please run build process (./scripts/runall.sh) first."
+        error "No compiled binaries found. Run 'make build-engine' first."
     fi
 
     # Check for compiled models
@@ -169,15 +175,14 @@ check_prerequisites() {
             continue
         fi
         
-        local install_dir="install/$soc"
-        if [[ -d "$install_dir/model" ]] && [[ -f "$install_dir/model/mobilenetv2-embedding-${soc,,}.rknn" ]]; then
+        if [[ -f "${MODELS_DIR}/$soc/mobilenetv2-embedding-${soc,,}.rknn" ]]; then
             found_models=true
             break
         fi
     done
 
     if [[ "$found_models" != "true" ]]; then
-        error "No compiled models found. Please ensure MobileNetV2 models are compiled for each SOC."
+        error "No compiled models found in ${MODELS_DIR}. Run 'make build-models' first."
     fi
 
     # Warn (non-fatal) if YOLOX model is missing — ROI detection falls back to OpenCV
@@ -186,9 +191,9 @@ check_prerequisites() {
             continue
         fi
         local yolox_name="yolox_s_${soc,,}.rknn"
-        if [[ ! -f "install/$soc/model/$yolox_name" ]]; then
+        if [[ ! -f "${MODELS_DIR}/$soc/$yolox_name" ]]; then
             warn "YOLOX-S model missing for $soc ($yolox_name) — TV detection will use OpenCV fallback."
-            warn "Run: ./compile-models to build it."
+            warn "Run: make build-models to build it."
         fi
     done
 
@@ -240,10 +245,10 @@ copy_binaries() {
         fi
         
         local platform="${SOC_PLATFORMS[$soc]}"
-        local build_dir="build_${platform,,}"
+        local build_dir="build_${soc,,}"
         local install_dir="install/$soc"
         local package_soc_dir="staging/$soc"
-        
+
         log "Copying $soc ($platform) binaries..."
         
         # Try build directory first, then install directory
@@ -341,12 +346,13 @@ copy_models() {
         
         local platform="${SOC_PLATFORMS[$soc]}"
         local install_dir="install/$soc"
+        local models_src="${MODELS_DIR}/$soc"
         local package_soc_dir="staging/$soc"
-        
-        log "Copying $soc ($platform) models from $install_dir..."
-        
-        if [[ ! -d "$install_dir/model" ]]; then
-            warn "Model directory $install_dir/model not found, skipping $soc models"
+
+        log "Copying $soc ($platform) models from $models_src..."
+
+        if [[ ! -d "$models_src" ]]; then
+            warn "Model directory $models_src not found, skipping $soc models"
             continue
         fi
 
@@ -354,8 +360,8 @@ copy_models() {
 
         # Copy MobileNetV2 embedding model
         local model_name="mobilenetv2-embedding-${soc,,}.rknn"
-        if [[ -f "$install_dir/model/$model_name" ]]; then
-            cp "$install_dir/model/$model_name" "$package_soc_dir/model/"
+        if [[ -f "$models_src/$model_name" ]]; then
+            cp "$models_src/$model_name" "$package_soc_dir/model/"
             log "Copied MobileNetV2 model for $soc"
         else
             warn "MobileNetV2 model ($model_name) not found for $soc"
@@ -363,8 +369,8 @@ copy_models() {
 
         # Copy YOLOX-S TV detection model (used during startup ROI detection)
         local yolox_name="yolox_s_${soc,,}.rknn"
-        if [[ -f "$install_dir/model/$yolox_name" ]]; then
-            cp "$install_dir/model/$yolox_name" "$package_soc_dir/model/"
+        if [[ -f "$models_src/$yolox_name" ]]; then
+            cp "$models_src/$yolox_name" "$package_soc_dir/model/"
             log "Copied YOLOX-S TV detection model for $soc"
         else
             warn "YOLOX-S model ($yolox_name) not found for $soc — TV auto-detection will fall back to OpenCV"
