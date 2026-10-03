@@ -45,9 +45,13 @@ fetch-sdk:           ## Ensure the aarch64 cross SDK is present in the shared ca
 prep:                ## Fetch RKNN headers + runtime into include/ (needs network)
 	bash scripts/prep.sh
 
+build-models:        ## Compile the RKNN models per SoC into the shared cache (needs docker + rknn_tk2 + cache/toolkit)
+	bash scripts/build-models.sh $(MODELS_DIR) $(SOC_LIST)
+
 run-tests:           ## Run host unit tests (no cross SDK needed)
 	bash test/cache_sh_test.sh
 	bash test/fetch_sdk_test.sh
+	bash test/build_models_contract_test.sh
 	g++ -std=c++17 -Wall -Iinclude test/test_camera_autodetect.cpp src/wvm/camera_autodetect.cpp src/wvm/logger.cpp -o /tmp/test_camera_autodetect
 	/tmp/test_camera_autodetect
 
@@ -57,4 +61,4 @@ clean:               ## Remove build artifacts (build_*/ install/ staging/ zips 
 	rm -rf build_* install staging *.zip
 	bash scripts/prep.sh clean 2>/dev/null || true
 
-.PHONY: help cache-info fetch-sdk prep run-tests test clean
+.PHONY: help cache-info fetch-sdk prep build-models run-tests test clean
