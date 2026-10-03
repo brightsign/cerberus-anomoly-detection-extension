@@ -52,6 +52,14 @@ bsfw_write_extension_lvm() {
     fi
 
     (
+        # Stop a running instance first so it is not holding the mount / files
+        # open when we unmount and lvremove the volume below. Guarded + ||true so
+        # a missing or already-stopped extension does not abort the (set -e) script.
+        echo "echo \"Stopping ${name} extension if running\""
+        echo "if [ -x '/var/volatile/bsext/${mount_name}/bsext_init' ]; then"
+        echo "    /var/volatile/bsext/${mount_name}/bsext_init stop || true"
+        echo "fi"
+
         # This shouldn't be necessary when this install script is
         # incorporated into a standard BrightSign upgrade script but
         # can be useful during development.
