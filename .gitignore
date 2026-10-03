@@ -1,5 +1,7 @@
 backups/
 toolkit/
+staging/
+*.rknn
 # RKNN header + runtime fetched by scripts/prep.sh (Rockchip proprietary; not vendored)
 include/rknn_api.h
 include/librknnrt.so
