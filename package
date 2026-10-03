@@ -279,6 +279,14 @@ copy_binaries() {
             warn "image-stream-server not found in $source_dir"
         fi
 
+        # Copy config-server binary (on-player ROI editor)
+        if [[ -f "$source_dir/config-server" ]]; then
+            cp "$source_dir/config-server" "$package_soc_dir/"
+            chmod +x "$package_soc_dir/config-server"
+        else
+            warn "config-server not found in $source_dir"
+        fi
+
         # Copy capture helper script (installed by cmake alongside the binary)
         if [[ -f "$source_dir/capture_tv_off_prototype.sh" ]]; then
             cp "$source_dir/capture_tv_off_prototype.sh" "$package_soc_dir/"

@@ -67,8 +67,13 @@
       <label class="pill">load config.json: <input id="cfgfile" type="file" accept=".json,application/json"></label>
       <span id="cfgstate" class="muted">no config loaded</span>
     </div>
+    <div class="row" id="serverRow" style="display:none">
+      <button id="save" class="primary">Save to player</button>
+      <button id="saveRestart" class="primary">Save &amp; Restart</button>
+      <span id="savestate" class="muted"></span>
+    </div>
     <div class="row">
-      <button id="dlConfig" class="primary">Download config.json</button>
+      <button id="dlConfig">Download config.json</button>
       <button id="copyRoi">Copy roi block</button>
     </div>
     <pre id="out">(load config.json, then draw boxes)</pre>
@@ -244,15 +249,69 @@
     a.href = URL.createObjectURL(blob); a.download = 'config.json'; a.click();
   };
 
-  // --- query-param bootstrap (url=...&live=1), set by zone-picker.sh ---
+  // --- server mode: save straight to the live config on the player ---
+  var savestate = document.getElementById('savestate');
+  function saveToPlayer(thenRestart) {
+    if (!loadedConfig) { alert('No config loaded from the player.'); return; }
+    savestate.textContent = 'saving...';
+    var cfg = ZP.mergeRoi(loadedConfig, boxes);
+    fetch('/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg, null, 2),
+    }).then(function (r) {
+      if (!r.ok) throw new Error('save failed (' + r.status + ')');
+      loadedConfig = cfg;                      // keep local copy in sync
+      if (!thenRestart) { savestate.textContent = 'saved'; return null; }
+      savestate.textContent = 'saved, restarting...';
+      return fetch('/restart', { method: 'POST' });
+    }).then(function (r) {
+      if (r && !r.ok) throw new Error('restart failed (' + r.status + ')');
+      if (r) savestate.textContent = 'saved + restart triggered';
+    }).catch(function (e) { savestate.textContent = String(e.message || e); });
+  }
+  document.getElementById('save').onclick = function () { saveToPlayer(false); };
+  document.getElementById('saveRestart').onclick = function () { saveToPlayer(true); };
+
+  // --- init: prefer server mode (page served by the on-player config-server) ---
   (function () {
     var q = new URLSearchParams(location.search);
-    var u = q.get('url');
-    if (u) { document.getElementById('url').value = u; setSrc(u); }
-    if (q.get('live') === '1') {
-      var cb = document.getElementById('live'); cb.checked = true;
-      cb.dispatchEvent(new Event('change'));
+    var qUrl = q.get('url');
+
+    function setImageDefault() {
+      var el = document.getElementById('url');
+      if (qUrl) { el.value = qUrl; }
+      else if (location.protocol.indexOf('http') === 0 && location.hostname) {
+        el.value = location.protocol + '//' + location.hostname + ':20200/image';
+      }
     }
+    function startLive() {
+      var cb = document.getElementById('live'); cb.checked = true; cb.dispatchEvent(new Event('change'));
+    }
+
+    // Try the on-player config endpoint. If it answers, we are hosted on the
+    // player: load the live config, reveal Save/Save & Restart, and default the
+    // image to this player's camera stream.
+    fetch('/config', { method: 'GET' }).then(function (r) {
+      if (!r.ok) throw new Error('no server config');
+      return r.json();
+    }).then(function (cfg) {
+      loadedConfig = cfg;
+      boxes = ZP.configToBoxes(loadedConfig);
+      document.getElementById('serverRow').style.display = '';
+      document.getElementById('cfgstate').textContent =
+        'loaded from player (' + boxes.length + ' zone' + (boxes.length === 1 ? '' : 's') + ')';
+      setImageDefault();
+      var u = document.getElementById('url').value;
+      if (u) { setSrc(u); startLive(); }
+      redraw();
+    }).catch(function () {
+      // Standalone (file:// or no server): keep the file-drop workflow.
+      setImageDefault();
+      var u = document.getElementById('url').value;
+      if (u) setSrc(u);
+      if (q.get('live') === '1') startLive();
+    });
   })();
 })();
 </script>

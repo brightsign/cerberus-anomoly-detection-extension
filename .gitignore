@@ -10,7 +10,7 @@ build_*/
 install/
 model/
 sdk/
-srv/
+srv/tftp/
 brightsign-oe/
 brightsign-x86_64*.sh
 argus-ext*.zip

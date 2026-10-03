@@ -83,7 +83,8 @@ run-tests:           ## Run host unit tests (no cross SDK needed)
 	bash test/no_stale_sdk_refs_test.sh
 	g++ -std=c++17 -Wall -Iinclude test/test_camera_autodetect.cpp src/wvm/camera_autodetect.cpp src/wvm/logger.cpp -o /tmp/test_camera_autodetect
 	/tmp/test_camera_autodetect
-	node tools/zone-picker.test.js
+	node srv/config-server/web/zone-picker.test.js
+	cd srv/config-server && go test ./...
 
 test: run-tests      ## Alias for run-tests
 

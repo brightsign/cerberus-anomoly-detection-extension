@@ -21,6 +21,7 @@ SCRIPT_PATH=$(echo "$SCRIPT_PATH" | sed 's/ext_npu_gaze/ext_npu_anomaly/g' | sed
 DAEMON_NAME="bsext-anomaly"
 PIDFILE="/var/run/${DAEMON_NAME}.pid"
 STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
+CONFIG_SERVER_PIDFILE="/var/run/bsext-config-server.pid"
 MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
 
 # defaults -- these can be overridden by environment variables
@@ -369,6 +370,26 @@ run_stream_server() {
     fi
 }
 
+# On-player ROI editor (zone picker): serves the page and reads/writes the live
+# SD config (/storage/sd/configs/config.json); "Save & Restart" execs this script.
+run_config_server() {
+    echo "run_config_server called with background=$1 port=$2"
+    local background=$1
+    local port=$2
+
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    local sd_config="/storage/sd/configs/config.json"
+
+    if [ "$background" = "true" ]; then
+        start-stop-daemon --start --background --make-pidfile --pidfile ${CONFIG_SERVER_PIDFILE} \
+                          --exec ${SOC_HOME}/config-server -- \
+                          -port ${port} -config ${sd_config} -soc-home ${SOC_HOME}
+    else
+        ${SOC_HOME}/config-server -port ${port} -config ${sd_config} -soc-home ${SOC_HOME}
+    fi
+}
+
 run_mqtt_broker() {
     echo "run_mqtt_broker called with background=$1"
     local background=$1
@@ -467,6 +488,11 @@ do_start() {
         pkill -9 -f "image-stream-server" 2>/dev/null || true
         sleep 1
     fi
+    if pgrep -f "config-server" >/dev/null 2>&1; then
+        echo "  Found existing config-server process, killing it..."
+        pkill -9 -f "config-server" 2>/dev/null || true
+        sleep 1
+    fi
     if pgrep -f "mosquitto.*bsext" >/dev/null 2>&1; then
         echo "  Found existing mosquitto process, killing it..."
         pkill -9 -f "mosquitto.*bsext" 2>/dev/null || true
@@ -474,7 +500,7 @@ do_start() {
     fi
     
     # Clean up stale PID files
-    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} 2>/dev/null || true
+    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${CONFIG_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} 2>/dev/null || true
 
     SOC_NAME=$(get_soc_name)
     setup_gstreamer_env
@@ -495,6 +521,20 @@ do_start() {
 
     # Start the anomaly_detection process as a daemon
     run_anomaly_detection true
+
+    # Start the on-player config/ROI editor (zone picker). Independent of the
+    # image stream server below (which may early-return when disabled).
+    CONFIG_SERVER_PORT=20300  # default port for the config/zone-picker server
+    reg_config_server_port=$(registry networking bs-config-server-port)
+    if [ -n "${reg_config_server_port}" ]; then
+        CONFIG_SERVER_PORT=${reg_config_server_port}
+    fi
+    if [ "${CONFIG_SERVER_PORT}" = "0" ]; then
+        echo "Config server is disabled (port set to 0)"
+    else
+        echo "Starting config server on port ${CONFIG_SERVER_PORT}"
+        run_config_server true ${CONFIG_SERVER_PORT}
+    fi
 
     STREAM_SERVER_PORT=20200  # default port for image stream server
     reg_stream_server_port=$(registry networking bs-image-stream-server-port)
@@ -587,6 +627,19 @@ do_stop() {
             pkill -9 -P $pid 2>/dev/null || true
         fi
         rm -f ${STREAM_SERVER_PIDFILE}
+    fi
+
+    # Stop the config-server (on-player ROI editor)
+    echo "  Searching for config-server processes..."
+    pkill -9 -f "config-server" 2>/dev/null || true
+    killall -9 config-server 2>/dev/null || true
+    if [ -f "${CONFIG_SERVER_PIDFILE}" ]; then
+        local cpid=$(cat ${CONFIG_SERVER_PIDFILE} 2>/dev/null)
+        if [ -n "$cpid" ]; then
+            kill -9 $cpid 2>/dev/null || true
+            pkill -9 -P $cpid 2>/dev/null || true
+        fi
+        rm -f ${CONFIG_SERVER_PIDFILE}
     fi
     
     # Give processes time to die

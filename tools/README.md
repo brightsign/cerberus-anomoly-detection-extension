@@ -1,66 +1,60 @@
 # Cerberus tools
 
-Host-side helpers. Nothing here runs on the player.
+Host-side helpers. (The zone-picker page itself now runs on the player, served by
+`srv/config-server`; `tools/zone-picker.sh` just opens it.)
 
 ## zone-picker — draw the ROI boxes (one per screen)
 
-A small static web page for defining the `roi` rectangles the model watches: you
-drag a box over each screen in the camera's field of view, and it emits the
-cerberus `roi` config block (rect mode, `tv1..tvN`, absolute camera pixels).
+Draw a box over each screen in the camera's field of view to define the `roi`
+rectangles the model watches (rect mode, `tv1..tvN`, absolute camera pixels). It
+runs **on the player**: the `config-server` (started by `bsext_init`) serves the
+page and reads/writes the live config at `/storage/sd/configs/config.json`.
 
-Files:
+The page and its logic live in the server so the binary can embed them:
 
-- `zone-picker.html` — the page (a `<canvas>` over the camera image).
-- `zone-picker.logic.js` — the pure ordering/scaling/clamping logic (unit-tested).
-- `zone-picker.test.js` — node test for the logic: `node tools/zone-picker.test.js`.
-- `zone-picker.sh` — launcher that serves the page and opens it pointed at a player.
+- `srv/config-server/web/zone-picker.html` — the page (`<canvas>` over the camera image).
+- `srv/config-server/web/zone-picker.logic.js` — pure ordering/scaling/clamping (unit-tested).
+- `srv/config-server/web/zone-picker.test.js` — `node .../zone-picker.test.js` (run via `make run-tests`).
+- `srv/config-server/main.go` — the on-player HTTP server (embeds the two web files).
+- `tools/zone-picker.sh` — opens the on-player page in your browser.
 
-### Use it
+### Use it (on-player)
 
-The camera image comes from the extension's **image-stream-server** (`/image`,
-default port **20200**). The player must be running the extension so that
-endpoint is up.
+The extension must be running (the config-server listens on port **20300** by
+default; the camera image comes from the image-stream-server on **20200**).
 
 ```sh
-tools/zone-picker.sh --player <player-ip>          # live view, port 20200
-tools/zone-picker.sh --player <player-ip> --once   # single snapshot, no refresh
-tools/zone-picker.sh --url http://<player>:20200/image
+tools/zone-picker.sh --player <player-ip>     # opens http://<player>:20300/
 ```
 
-Then, in the browser (single-file round-trip):
+In the browser:
 
-1. **Load config.json** — the player's current config (scp it down first). Its
-   existing zones appear as editable boxes.
+1. The page **loads the live config** from the player; existing zones appear as
+   editable boxes.
 2. Drag a rectangle over each screen; delete/redraw as needed. Boxes are
    auto-numbered `tv1..tvN` top&rarr;bottom, left&rarr;right (matching
    `src/wvm/roi.cpp`). "Clear all" resets.
 3. Keep every box **fully inside the frame** — the capture crop drops
    out-of-bounds ROIs (the page flags/clamps them).
-4. **Download config.json** — the same file with your zones swapped in and every
-   other setting preserved. (There is no separate "base"/fragment; it is one file.)
+4. **Save to player** writes the live config; **Save & Restart** writes it and
+   restarts the extension so the zones take effect (ROIs are read at startup).
 
-### Apply on the player
+Coordinates are **absolute pixels in the capture frame**, so they line up with
+the camera image (the page shows the detected frame size). No normalization.
 
-ROIs are read at startup; there is no live reload. Put the config at the SD
-override path and restart the extension:
+### Offline (no running player)
 
-```sh
-scp config.json brightsign@<player>:/storage/sd/configs/config.json
-# then, in the player's root shell:
-/var/volatile/bsext/ext_npu_anomaly/bsext_init restart
-```
-
-The coordinates are **absolute pixels in the capture frame**, so they line up as
-long as the capture resolution matches the image you drew on (the page shows the
-detected frame size). No normalization.
+Open `srv/config-server/web/zone-picker.html` directly in a browser. There is no
+server, so the page falls back to the file-drop workflow: **load config.json**
+(a copy you scp'd down), draw, **Download config.json**, then copy it to
+`/storage/sd/configs/config.json` and `bsext_init restart`.
 
 ### Notes
 
-- No camera up yet? Load a saved frame with the file picker instead of a URL.
-- The live image already shows the current ROI boxes/labels (it's the annotated
-  `/tmp/output.jpg`), so you can see existing zones while redrawing.
 - One axis-aligned rectangle per screen; rotated/quad zones are not supported
   (the engine's `RoiRect` is `x/y/w/h`).
+- The camera image already shows the current ROI boxes/labels (it is the
+  annotated `/tmp/output.jpg`), so you see existing zones while redrawing.
 
 ## Python helpers
 

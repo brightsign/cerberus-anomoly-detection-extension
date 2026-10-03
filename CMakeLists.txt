@@ -361,7 +361,19 @@ add_custom_command(TARGET anomaly_detection POST_BUILD
 if(TARGET mosquitto_broker)
   add_dependencies(anomaly_detection mosquitto_broker)
 endif()
+# config-server: in-repo Go HTTP server for on-player ROI editing. SoC-independent
+# (pure Go/arm64), built once into the per-SoC build dir and bundled like the
+# image-stream-server. The zone-picker HTML/JS is embedded in the binary.
+set(CONFIG_SERVER_BINARY ${CMAKE_BINARY_DIR}/config-server)
+add_custom_target(config_server ALL
+  COMMAND ${CMAKE_COMMAND} -E echo "Building config-server (Go, arm64)..."
+  COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/build_config_server.sh ${CMAKE_SOURCE_DIR}/srv/config-server ${CONFIG_SERVER_BINARY}
+  COMMENT "Building config-server"
+  VERBATIM
+)
+
 add_dependencies(anomaly_detection image_stream_server)
+add_dependencies(anomaly_detection config_server)
 
 # install target and libraries (CMAKE_INSTALL_PREFIX = install/${SOC_DIR}, set once above)
 install(TARGETS anomaly_detection DESTINATION ./)
@@ -375,6 +387,14 @@ install(FILES ${CMAKE_SOURCE_DIR}/capture_tv_off_prototype.sh
 
 # Install the image stream server binary from the copied location
 install(FILES ${CMAKE_BINARY_DIR}/image-stream-server
+        DESTINATION ./
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                   GROUP_READ GROUP_EXECUTE
+                   WORLD_READ WORLD_EXECUTE
+        OPTIONAL)
+
+# Install the config-server binary (on-player ROI editor).
+install(FILES ${CONFIG_SERVER_BINARY}
         DESTINATION ./
         PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
                    GROUP_READ GROUP_EXECUTE
