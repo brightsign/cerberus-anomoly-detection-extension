@@ -9,9 +9,12 @@ cd "$REPO"
 fail=0
 
 # Live build files to scan (tracked; excludes docs and the superpowers workspace).
+# Scan tracked live build files, excluding docs and this test itself (which names
+# the forbidden patterns in its own comments and scan calls).
+SELF="test/no_stale_sdk_refs_test.sh"
 mapfile -t FILES < <(git ls-files -- \
   '*.sh' '*.cmake' 'CMakeLists.txt' 'test/CMakeLists.txt' 'Makefile' 'package' 'build_test.sh' \
-  | grep -vE '^(docs/|\.superpowers/)')
+  | grep -vE "^(docs/|\.superpowers/)" | grep -vxF "$SELF")
 
 scan() { # pattern label
   local pat="$1" label="$2" hit

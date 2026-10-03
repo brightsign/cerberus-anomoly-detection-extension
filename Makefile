@@ -10,6 +10,17 @@
 # ARGUS_CACHE_DIR is forwarded explicitly to $(shell ...) because a command-line
 # override is a Make variable, not an env var, and exported so the scripts (which
 # source cache.sh themselves) resolve the same location.
+# This repo sits beside the argus projects' argus-all/ dir rather than inside it,
+# so the shared cache (argus-all/argus-build-cache) is not at the default
+# ../argus-build-cache. Auto-discover that sibling cache when it holds a built SDK
+# and ARGUS_CACHE_DIR was not set explicitly. An explicit override always wins.
+ifeq ($(strip $(ARGUS_CACHE_DIR)),)
+  _argus_all_cache := $(abspath $(CURDIR)/../argus-all/argus-build-cache)
+  ifneq ($(wildcard $(_argus_all_cache)/sdk/environment-setup-aarch64-oe-linux),)
+    ARGUS_CACHE_DIR := $(_argus_all_cache)
+  endif
+endif
+
 CACHE_SH := ARGUS_CACHE_DIR='$(ARGUS_CACHE_DIR)' bash scripts/lib/cache.sh print
 CACHE_DIR   := $(shell $(CACHE_SH) cache)
 SDK_DIR     := $(shell $(CACHE_SH) sdk)
