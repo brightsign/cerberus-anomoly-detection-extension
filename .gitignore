@@ -1,5 +1,8 @@
 backups/
 toolkit/
+# RKNN header + runtime fetched by scripts/prep.sh (Rockchip proprietary; not vendored)
+include/rknn_api.h
+include/librknnrt.so
 build/
 build_*/
 install/
@@ -13,3 +16,11 @@ argus-dev*.zip
 anomaly-detection-ext-*.zip
 anomaly-detection-dev-*.zip
 brightsign-*-src-*.tar.gz
+.env
+.envrc
+*~
+bin/
+.llm/
+__pycache__/
+*.pyc
+.venv/
