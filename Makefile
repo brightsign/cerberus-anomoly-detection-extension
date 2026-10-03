@@ -87,7 +87,7 @@ run-tests:           ## Run host unit tests (no cross SDK needed)
 test: run-tests      ## Alias for run-tests
 
 clean:               ## Remove build artifacts (build_*/ install/ staging/ zips + prep headers)
-	rm -rf build_* install staging *.zip
+	rm -rf build_rk* build_test_* install staging *.zip
 	bash scripts/prep.sh clean 2>/dev/null || true
 
 .PHONY: help cache-info fetch-sdk prep build-models build-engine package build run-tests test clean
