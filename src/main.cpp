@@ -140,8 +140,9 @@ static std::string find_config() {
     return sd_cfg;
   }
   
-  // Priority 3: Package default (read-only)
-  return "config/videowall.json";
+  // Priority 3: Package default (read-only). bsext_init seeds the SD copy from
+  // this on first boot, so normally the SD override above is what is used.
+  return "config/config.json";
 }
 
 int main(int argc, char** argv) {

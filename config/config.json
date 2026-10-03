@@ -1,10 +1,9 @@
 {
-  "_comment": "Physical camera health monitoring. Uses rect ROI — crop each TV panel individually to exclude room background, which dilutes luma and embedding metrics. Add one entry per TV in the tvs array.",
   "device": {
-    "camera_device": "rtsp://sreetapo:Rtspstream123@192.168.0.123:554/stream1",
+    "camera_device": "usb_camera",
     "width": 1280,
     "height": 720,
-    "fps": 10,
+    "fps": 30,
     "pixel_format": "YUYV"
   },
   "model": {
@@ -13,76 +12,61 @@
     "input_h": 224,
     "embedding_dim": 1280
   },
-  "reference": { "enabled": false },
-  "roi": {
-    "mode": "auto",
-    "_comment": "mode=auto: OpenCV detects TV rectangles automatically. On startup loads saved ROIs from save_path, then re-detects every detect_interval_ms. Switch to mode=rect and add a tvs[] array if you need fixed coordinates.",
-    "auto": {
-      "max_tvs": 3,
-      "downscale_w": 640,
-      "downscale_h": 360,
-      "detect_interval_ms": 2000,
-      "min_area_pct": 0.03,
-      "max_area_pct": 0.85,
-      "aspect_min": 0.5,
-      "aspect_max": 2.3,
-      "rectangularity_min": 0.45,
-      "commit_iou_min": 0.20,
-      "stable_frames": 2,
-      "save_path": "",
-      "detect_fallback_ms": 0,
-      "max_interior_luma": 180,
-      "min_interior_luma": 0,
-      "yolo_model_path": "model/yolox_s_@TARGET_SOC@.rknn",
-      "yolo_conf_thresh": 0.35
-    }
-  },
-  "anomaly": { "enabled": false },
-  "health": {
+  "reference": {
     "enabled": true,
-    "analysis_fps": 5,
-    "dark_luma_threshold": 30,
-    "black_enter_ratio": 0.95,
-    "black_exit_ratio": 0.90,
-    "black_var_enter": 300.0,
-    "persist_black_ms": 1500,
-    "persist_recover_ms": 10000,
-    "off_mean": 6.0,
-    "off_var": 30.0,
-    "off_luma_mean_max": 120.0,
-    "off_dark_ratio_min": 0.10,
-    "off_sat_mean_max": 18.0,
-    "off_laplacian_var_max": 300.0,
-    "off_temporal_diff_max": 2.0,
-    "off_dark_ratio_exit": 0.01,
-    "off_sat_mean_exit": 25.0,
-    "off_laplacian_var_exit": 300.0,
-    "off_temporal_diff_exit": 4.0,
-    "persist_off_ms": 3000,
-    "persist_off_recover_ms": 3000,
-    "osd_mode": "embedding_prototypes",
-    "osd_prototypes_path": "/storage/sd/osd_prototypes.json",
-    "osd_sim_min": 0.85,
-    "tv_off_sim_min": 0.75,
-    "osd_sim_min_no_signal": 0.80,
-    "osd_sim_min_wrong_input": 0.85,
-    "persist_osd_ms": 1500,
-    "persist_no_signal_ms": 8000,
-    "heartbeat_interval_ms": 10000,
-    "prototype_capture": false,
-    "prototype_labels": { "tv1": "TV_OFF" },
-    "prototype_capture_seconds": 30,
-    "prototype_output_path": "/storage/sd/osd_prototypes.json"
+    "ref_fps": 5,
+    "mode": "auto",
+    "search_window_seconds": 2.0,
+
+    "auto_source": "tv_id",
+    "ref_tv_id": "tv1",
+
+    "auto_min_ref_seconds": 3.0,
+
+    "auto_persist": true,
+    "auto_persist_path": "/storage/sd/references/auto_ref_embeddings.f32",
+
+    "auto_max_seconds": 900
+  },
+  "roi": {
+    "mode": "rect",
+    "tvs": [
+      { "id": "tv1", "x": 50,  "y": 80, "w": 560, "h": 620, "_comment": "Left monitor - REFERENCE" },
+      { "id": "tv2", "x": 650, "y": 80, "w": 560, "h": 620, "_comment": "Right monitor - TEST with anomalies" }
+    ]
+  },
+  "anomaly": {
+    "enabled": true,
+    "sample_fps": 5,
+
+    "black_enter_mean": 120.0,
+    "black_exit_mean": 140.0,
+    "black_enter_var": 10000.0,
+    "black_exit_var": 11000.0,
+    "persist_black_ms": 500,
+    "persist_black_recover_ms": 500,
+
+    "persist_freeze_ms": 2000,
+    "persist_mismatch_ms": 2500,
+    "lag_threshold_s": 1.5,
+    "stutter_window_ms": 3000,
+    "similarity_min": 0.75,
+
+    "camera_timeout_ms": 1500,
+
+    "peer_enabled": false,
+    "peer_similarity_min": 0.85,
+    "persist_outlier_ms": 2500
   },
   "mqtt": {
     "enabled": true,
     "host": "127.0.0.1",
     "port": 1883,
-    "topic": "videowall/health",
-    "client_id": "anomaly-monitor"
+    "topic": "videowall/events",
+    "client_id": "xt5-wall-monitor"
   },
   "logging": {
-    "level": "info",
-    "path": "/var/log/anomaly_detection.log"
+    "level": "INFO",
+    "path": "/tmp/videowall-monitor.log"
   }
 }

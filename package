@@ -409,7 +409,7 @@ copy_configs() {
             log "Copied etc configs for $soc"
         fi
         
-        # Copy config/ directory if it exists (correct location for videowall.json)
+        # Copy config/ directory if it exists (holds the single config.json)
         if [[ -d "$install_dir/config" ]]; then
             mkdir -p "$package_soc_dir/config"
             cp -r "$install_dir/config"/* "$package_soc_dir/config/"

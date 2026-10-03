@@ -469,13 +469,9 @@ brightsign-npu-anomaly-detection/
 │   ├── mqtt.hpp                  # MQTT interface
 │   └── pipeline.hpp              # Pipeline orchestrator
 ├── include/nlohmann/json.hpp     # JSON library (header-only)
-├── config/                       # Configuration files
-│   ├── health_5tv.json           # 5-TV health monitoring config
-│   ├── config.json               # Default runtime config
-│   ├── config_detect.json        # Detection-only config
-│   ├── config_record.json        # Recording config
-│   ├── osd_prototypes_template.json  # OSD prototype template
-│   └── videowall.json            # Legacy videowall config
+├── config/                       # Configuration
+│   ├── config.json               # THE config (shipped, seeded to SD on first boot)
+│   └── examples/                 # Reference configs (not shipped), e.g. health-rtsp.json
 ├── test_videos/                  # Test videos and mosaic script
 │   ├── Anomaly_Albertsons.mp4
 │   ├── Anomaly_Wallmart.mp4
@@ -506,8 +502,8 @@ install/                          # Installation directories
 ├── RK3588/
 │   ├── bin/
 │   │   └── anomaly_detection     # Single unified executable
-│   ├── etc/
-│   │   └── videowall.json        # Config
+│   ├── config/
+│   │   └── config.json           # Config (seeded to /storage/sd/configs/config.json)
 │   └── model/
 │       └── mobilenetv2-embedding-rk3588.rknn
 ├── RK3568/

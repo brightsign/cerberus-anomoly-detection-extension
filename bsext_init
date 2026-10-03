@@ -145,73 +145,35 @@ run_anomaly_detection() {
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
     cd ${SOC_HOME}
 
-    # NOTE: DO NOT pass video source as positional argument - it overrides registry!
-    # The application will automatically read bsext-anomaly-video-device from registry
-    # 
-    # NOTE: DO NOT pass config.json as argument - let app use its own search logic:
-    #   1. CLI: --config <path>
-    #   2. ENV: $BSEXT_CONFIG  
-    #   3. SD:  /storage/sd/configs/config.json (writable override)
-    #   4. PKG: ${SOC_HOME}/configs/config.json (read-only default)
-    
+    # The app finds its own config (do not pass one as an arg). Search order:
+    #   1. ENV  $BSEXT_CONFIG
+    #   2. SD   /storage/sd/configs/config.json   (the single editable config; seeded below)
+    #   3. PKG  config/config.json                (read-only default, used to seed the SD copy)
+
     echo "Starting anomaly detection service..."
-    echo "Config will be auto-detected (priority: SD card > package default)"
-    
-    # Get video source (from registry or auto-detect)
-    local video_source=$(get_video_source)
-    echo "Video source detected: ${video_source}"
-    
-    # Update config.json with detected video device
-    # Priority: SD card config > package config
-    # Default config: health_5tv_xt5.json (5-TV health monitoring with RTSP support)
-    local config_file="${SOC_HOME}/config/health_5tv_xt5.json"
-    local sd_config="/storage/sd/configs/config.json"
-    
-    # Use SD card config if it exists, otherwise use package config
-    if [ -f "${sd_config}" ]; then
-        config_file="${sd_config}"
-        echo "Using SD card config: ${sd_config}"
-    else
-        echo "Using package config: ${config_file}"
-    fi
-    
-    # Update camera_device in the config file
-    if [ -f "${config_file}" ]; then
-        # Show current value before update
-        local current_device=$(grep -o '"camera_device"[[:space:]]*:[[:space:]]*"[^"]*"' "${config_file}" 2>/dev/null || echo "not found")
-        echo "  Current config value: ${current_device}"
 
-        # If config already has an RTSP URL, never overwrite it with a USB device
-        if echo "${current_device}" | grep -qi "rtsp://"; then
-            echo "  Config already has RTSP URL - skipping auto-detection override"
-            echo "  Using RTSP source from config (not detected USB device: ${video_source})"
+    # Single source of truth: /storage/sd/configs/config.json on the SD card.
+    # Seed it from the packaged default on first boot so it exists and is editable
+    # in the field (the zone picker edits this same file). Never overwrite an
+    # existing SD config -- that is the operator's edited copy.
+    local sd_config_dir="/storage/sd/configs"
+    local sd_config="${sd_config_dir}/config.json"
+    local pkg_config="${SOC_HOME}/config/config.json"
+    if [ ! -f "${sd_config}" ]; then
+        echo "No SD config found; seeding ${sd_config} from packaged default"
+        mkdir -p "${sd_config_dir}"
+        if [ -f "${pkg_config}" ]; then
+            cp "${pkg_config}" "${sd_config}" && echo "  Seeded ${sd_config}" \
+                || echo "  WARNING: failed to seed ${sd_config}; app falls back to packaged default"
         else
-            echo "Updating camera_device in config to: ${video_source}"
-
-            # Create backup
-            cp "${config_file}" "${config_file}.bak" 2>/dev/null || true
-
-            # Update the camera_device field in JSON using sed
-            # This will match "camera_device": "anything" and replace with detected device
-            sed -i.tmp "s|\"camera_device\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"camera_device\": \"${video_source}\"|" "${config_file}"
-            rm -f "${config_file}.tmp"
-
-            # Verify the update worked
-            local new_device=$(grep -o '"camera_device"[[:space:]]*:[[:space:]]*"[^"]*"' "${config_file}" 2>/dev/null || echo "not found")
-            echo "  Updated config value: ${new_device}"
-
-            if [ "${current_device}" = "${new_device}" ] && [ "${video_source}" != "/dev/video0" ]; then
-                echo "  WARNING: Config update may have failed - value unchanged!"
-            fi
+            echo "  WARNING: packaged config not found at ${pkg_config}"
         fi
     else
-        echo "WARNING: Config file not found: ${config_file}"
+        echo "Using existing SD config (operator-edited): ${sd_config}"
     fi
-    
-    # Debug: Show exactly what we're passing to anomaly_detection
+
     echo "DEBUG: SOC_HOME = ${SOC_HOME}"
-    echo "DEBUG: Video source = ${video_source}"
-    echo "DEBUG: Config file = ${config_file}"
+    echo "DEBUG: Config (SD, editable) = ${sd_config}"
     echo "DEBUG: About to execute: ${SOC_HOME}/anomaly_detection"
     
     # Default to running in foreground

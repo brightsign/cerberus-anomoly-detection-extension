@@ -76,7 +76,26 @@
     return { mode: 'rect', tvs: assignIds(orderRowMajor(frameBoxes)) };
   }
 
-  const api = { scaleBox, orderRowMajor, assignIds, clampToFrame, buildRoiConfig };
+  // Pull existing rect zones out of a loaded config so they can be shown as
+  // editable boxes. Returns [] for a non-rect (or missing) roi.
+  function configToBoxes(config) {
+    var roi = config && config.roi;
+    if (!roi || roi.mode !== 'rect' || !Array.isArray(roi.tvs)) return [];
+    return roi.tvs.map(function (t) {
+      return { x: t.x | 0, y: t.y | 0, w: t.w | 0, h: t.h | 0 };
+    });
+  }
+
+  // Return a NEW config object, every key of the input preserved, with roi
+  // replaced by the rect block for the given frame-pixel boxes. Input untouched.
+  function mergeRoi(config, frameBoxes) {
+    var out = JSON.parse(JSON.stringify(config || {}));
+    out.roi = buildRoiConfig(frameBoxes);
+    return out;
+  }
+
+  const api = { scaleBox, orderRowMajor, assignIds, clampToFrame, buildRoiConfig,
+                configToBoxes, mergeRoi };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.ZonePicker = api;
 })(typeof window !== 'undefined' ? window : this);

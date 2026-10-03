@@ -45,5 +45,26 @@ check('in-bounds not flagged', inb.oob === false && inb.w === 100);
 const cfg = ZP.buildRoiConfig([{ x: 10, y: 10, w: 100, h: 100 }]);
 check('roi block is rect-mode', cfg.mode === 'rect' && cfg.tvs.length === 1 && cfg.tvs[0].id === 'tv1');
 
+// configToBoxes: pull existing rect zones out of a loaded config for editing.
+const loaded = {
+  device: { camera_device: 'usb_camera' },
+  roi: { mode: 'rect', tvs: [
+    { id: 'tv1', x: 50, y: 80, w: 560, h: 620, _comment: 'left' },
+    { id: 'tv2', x: 650, y: 80, w: 560, h: 620 },
+  ] },
+  mqtt: { host: '127.0.0.1' },
+};
+const pulled = ZP.configToBoxes(loaded);
+check('configToBoxes count', pulled.length === 2);
+check('configToBoxes coords', pulled[0].x === 50 && pulled[0].w === 560 && pulled[1].x === 650);
+check('configToBoxes ignores non-rect', ZP.configToBoxes({ roi: { mode: 'auto' } }).length === 0);
+check('configToBoxes handles missing roi', ZP.configToBoxes({}).length === 0);
+
+// mergeRoi: return a NEW config with roi replaced, every other key preserved, input untouched.
+const merged = ZP.mergeRoi(loaded, [{ x: 0, y: 0, w: 100, h: 100 }]);
+check('mergeRoi replaces roi', merged.roi.mode === 'rect' && merged.roi.tvs.length === 1 && merged.roi.tvs[0].id === 'tv1');
+check('mergeRoi preserves other keys', merged.device.camera_device === 'usb_camera' && merged.mqtt.host === '127.0.0.1');
+check('mergeRoi does not mutate input', loaded.roi.tvs.length === 2);
+
 console.log(fail === 0 ? 'ALL PASS' : (fail + ' FAILURES'));
 process.exit(fail === 0 ? 0 : 1);

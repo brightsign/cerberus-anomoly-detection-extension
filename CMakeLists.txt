@@ -241,12 +241,13 @@ endif()
 # The executable is installed once, to the extension root (DESTINATION ./), near
 # the end of this file -- bsext_init launches ${SOC_HOME}/anomaly_detection.
 
-# Install config files to config/ directory, substituting @TARGET_SOC@ so
-# rknn_path points to the correct model for each platform (rk3588/rk3568/rk3576).
-foreach(_cfg videowall.json health_5tv.json videowall_rtsp.json config.json)
-  configure_file(config/${_cfg} ${CMAKE_CURRENT_BINARY_DIR}/config/${_cfg} @ONLY)
-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/config/${_cfg} DESTINATION config)
-endforeach()
+# Install the single canonical config, substituting @TARGET_SOC@ so rknn_path
+# points to the correct model for each platform (rk3588/rk3568/rk3576). This is
+# the only config shipped on the player; bsext_init seeds it to the SD card
+# (/storage/sd/configs/config.json) on first boot, where it is edited in the
+# field. Other config/*.json are repo-only examples (see config/examples/).
+configure_file(config/config.json ${CMAKE_CURRENT_BINARY_DIR}/config/config.json @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/config/config.json DESTINATION config)
 
 # SOC_DIR (uppercase TARGET_SOC) and CMAKE_INSTALL_PREFIX are defined once near
 # the top of this file.

@@ -27,17 +27,17 @@ tools/zone-picker.sh --player <player-ip> --once   # single snapshot, no refresh
 tools/zone-picker.sh --url http://<player>:20200/image
 ```
 
-Then, in the browser:
+Then, in the browser (single-file round-trip):
 
-1. Drag a rectangle over each screen. Boxes are auto-numbered `tv1..tvN`
-   top&rarr;bottom, left&rarr;right (matching `src/wvm/roi.cpp`). Delete any box
-   from the list; "Clear all" resets.
-2. Keep every box **fully inside the frame** — the capture crop drops
+1. **Load config.json** — the player's current config (scp it down first). Its
+   existing zones appear as editable boxes.
+2. Drag a rectangle over each screen; delete/redraw as needed. Boxes are
+   auto-numbered `tv1..tvN` top&rarr;bottom, left&rarr;right (matching
+   `src/wvm/roi.cpp`). "Clear all" resets.
+3. Keep every box **fully inside the frame** — the capture crop drops
    out-of-bounds ROIs (the page flags/clamps them).
-3. Get the config out, either way:
-   - **Copy roi block** → paste over the `"roi"` key in your config, or
-   - load your current `config.json` (the file input) and **Download config.json**
-     to get a complete file with the new `roi` merged in.
+4. **Download config.json** — the same file with your zones swapped in and every
+   other setting preserved. (There is no separate "base"/fragment; it is one file.)
 
 ### Apply on the player
 

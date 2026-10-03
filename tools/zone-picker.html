@@ -64,17 +64,24 @@
     </table>
 
     <div class="row">
-      <button id="copyRoi" class="primary">Copy roi block</button>
-      <input id="base" type="file" accept=".json,application/json" title="optional: load your current config.json">
-      <button id="dlConfig">Download config.json</button>
+      <label class="pill">load config.json: <input id="cfgfile" type="file" accept=".json,application/json"></label>
+      <span id="cfgstate" class="muted">no config loaded</span>
     </div>
-    <pre id="out">(draw some boxes)</pre>
+    <div class="row">
+      <button id="dlConfig" class="primary">Download config.json</button>
+      <button id="copyRoi">Copy roi block</button>
+    </div>
+    <pre id="out">(load config.json, then draw boxes)</pre>
 
     <div class="steps">
-      <b>Apply on the player:</b>
+      <b>Workflow (one file):</b>
       <ol>
-        <li>Save the config to <code>/storage/sd/configs/config.json</code> (scp it, or use <b>Download config.json</b> after loading your current config).</li>
-        <li>Restart: <code>/var/volatile/bsext/ext_npu_anomaly/bsext_init restart</code>.</li>
+        <li>Load the player's current <code>config.json</code> (scp it down first). Its existing zones appear as editable boxes.</li>
+        <li>Draw / delete boxes to match the screens.</li>
+        <li><b>Download config.json</b> &mdash; the same file with your zones swapped in (everything else preserved).</li>
+        <li>Copy it back and restart:<br>
+          <code>scp config.json brightsign@PLAYER:/storage/sd/configs/config.json</code><br>
+          <code>/var/volatile/bsext/ext_npu_anomaly/bsext_init restart</code></li>
       </ol>
       <div class="muted">Boxes must lie fully inside the frame &mdash; out-of-bounds ROIs are dropped by the capture crop.</div>
     </div>
@@ -97,7 +104,7 @@
   // Boxes are stored in NATURAL (camera-frame) pixels so ids/output are stable
   // regardless of how large the image is displayed.
   var boxes = [];
-  var baseConfig = null;      // optional loaded config.json to merge into
+  var loadedConfig = null;    // the config.json being edited (round-tripped)
   var liveTimer = null;
   var drag = null;            // { x0,y0,x1,y1 } in displayed-canvas px
 
@@ -216,15 +223,22 @@
     var text = '"roi": ' + JSON.stringify(ZP.buildRoiConfig(boxes), null, 2);
     navigator.clipboard && navigator.clipboard.writeText(text);
   };
-  document.getElementById('base').onchange = function (ev) {
+  document.getElementById('cfgfile').onchange = function (ev) {
     var f = ev.target.files[0]; if (!f) return;
     var rd = new FileReader();
-    rd.onload = function () { try { baseConfig = JSON.parse(rd.result); } catch (e) { baseConfig = null; alert('Not valid JSON'); } };
+    rd.onload = function () {
+      try { loadedConfig = JSON.parse(rd.result); }
+      catch (e) { loadedConfig = null; alert('Not valid JSON'); return; }
+      boxes = ZP.configToBoxes(loadedConfig);        // pre-fill existing zones as editable boxes
+      document.getElementById('cfgstate').textContent =
+        'loaded (' + boxes.length + ' existing zone' + (boxes.length === 1 ? '' : 's') + ')';
+      redraw();
+    };
     rd.readAsText(f);
   };
   document.getElementById('dlConfig').onclick = function () {
-    var cfg = baseConfig ? JSON.parse(JSON.stringify(baseConfig)) : {};
-    cfg.roi = ZP.buildRoiConfig(boxes);
+    if (!loadedConfig) { alert('Load config.json first (so the whole file is preserved, not just the zones).'); return; }
+    var cfg = ZP.mergeRoi(loadedConfig, boxes);
     var blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = 'config.json'; a.click();
