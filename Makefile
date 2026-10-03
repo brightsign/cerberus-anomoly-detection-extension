@@ -69,6 +69,7 @@ run-tests:           ## Run host unit tests (no cross SDK needed)
 	bash test/cache_sh_test.sh
 	bash test/fetch_sdk_test.sh
 	bash test/build_models_contract_test.sh
+	bash test/no_stale_sdk_refs_test.sh
 	g++ -std=c++17 -Wall -Iinclude test/test_camera_autodetect.cpp src/wvm/camera_autodetect.cpp src/wvm/logger.cpp -o /tmp/test_camera_autodetect
 	/tmp/test_camera_autodetect
 
