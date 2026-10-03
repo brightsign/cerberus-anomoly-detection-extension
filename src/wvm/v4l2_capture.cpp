@@ -260,14 +260,22 @@ bool V4L2Capture::init_device() {
     return false;
   }
 
+  // Use this node's device_caps, not the device-wide capabilities union. A UVC
+  // webcam exposes a real capture node and a paired metadata node; the union
+  // reports VIDEO_CAPTURE on both, so capabilities would misidentify the metadata
+  // node as capture (then "No pixel formats enumerated"). device_caps is per-node.
+  const uint32_t caps = (cap.capabilities & V4L2_CAP_DEVICE_CAPS)
+                            ? cap.device_caps
+                            : cap.capabilities;
+
   is_mplane_ =
-      (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE) != 0;
+      (caps & V4L2_CAP_VIDEO_CAPTURE_MPLANE) != 0;
 
   const bool is_capture =
-      (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) != 0;
+      (caps & V4L2_CAP_VIDEO_CAPTURE) != 0;
 
   const bool is_streaming =
-      (cap.capabilities & V4L2_CAP_STREAMING) != 0;
+      (caps & V4L2_CAP_STREAMING) != 0;
 
   Logger::instance().log(LogLevel::INFO, "V4L2 caps: driver=%s card=%s bus=%s",
                          cap.driver, cap.card, cap.bus_info);

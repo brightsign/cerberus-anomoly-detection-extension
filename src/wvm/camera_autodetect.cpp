@@ -63,8 +63,15 @@ std::string auto_detect_usb_device_v4l2() {
       continue;
     }
 
-    if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) ||
-        !(cap.capabilities & V4L2_CAP_STREAMING)) {
+    // Use this node's device_caps, not the device-wide capabilities union: a UVC
+    // webcam (e.g. the Logitech C920) exposes a real capture node AND a paired
+    // metadata node, and the union reports VIDEO_CAPTURE on both -- so checking
+    // capabilities would wrongly accept the metadata node, which then enumerates
+    // zero capture formats. device_caps is per-node. (Matches argus-rtsp-watcher.)
+    const uint32_t caps = (cap.capabilities & V4L2_CAP_DEVICE_CAPS)
+                              ? cap.device_caps
+                              : cap.capabilities;
+    if (!(caps & V4L2_CAP_VIDEO_CAPTURE) || !(caps & V4L2_CAP_STREAMING)) {
       ::close(fd);
       continue;
     }
