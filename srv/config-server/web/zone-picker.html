@@ -9,86 +9,50 @@
   body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #15181d; color: #e6e9ee; }
   header { padding: 10px 16px; background: #1d222a; border-bottom: 1px solid #2b313b; }
   header h1 { margin: 0; font-size: 16px; }
-  header .hint { color: #9aa4b2; font-size: 12px; margin-top: 2px; }
+  header .hint { color: #9aa4b2; font-size: 12px; }
   main { display: flex; gap: 16px; padding: 16px; align-items: flex-start; flex-wrap: wrap; }
   #stage { position: relative; line-height: 0; max-width: 100%; }
   #img { display: block; max-width: 100%; height: auto; background: #000; }
   #overlay { position: absolute; left: 0; top: 0; cursor: crosshair; }
-  .panel { flex: 1 1 320px; min-width: 300px; max-width: 520px; }
-  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-  input[type=text] { flex: 1 1 200px; background: #0f1216; color: #e6e9ee; border: 1px solid #333b47; border-radius: 6px; padding: 6px 8px; }
-  button { background: #2a3340; color: #e6e9ee; border: 1px solid #3a4452; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  .panel { flex: 1 1 300px; min-width: 260px; max-width: 460px; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+  button { background: #2a3340; color: #e6e9ee; border: 1px solid #3a4452; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
   button:hover { background: #343f4e; }
   button.primary { background: #2d6cdf; border-color: #2d6cdf; }
-  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+  button.warn { background: #b4472d; border-color: #b4472d; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #262c35; }
-  th { color: #9aa4b2; font-weight: 600; }
-  pre { background: #0f1216; border: 1px solid #262c35; border-radius: 6px; padding: 10px; overflow: auto; white-space: pre-wrap; font-size: 12px; }
-  .warn { color: #ffb454; }
+  th { color: #9aa4b2; }
   .muted { color: #9aa4b2; }
   .pill { background: #0f1216; border: 1px solid #333b47; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
-  .steps { font-size: 13px; color: #c9d1dc; }
-  code { background: #0f1216; padding: 1px 5px; border-radius: 4px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Cerberus Zone Picker</h1>
-  <div class="hint">Drag boxes over each screen in the camera view. Boxes are numbered <code>tv1..tvN</code> top&rarr;bottom, left&rarr;right. Output is the <code>roi</code> block in absolute camera pixels.</div>
+  <div class="hint">Drag a box over each screen. Save writes the config; Restart applies it.</div>
 </header>
 
 <main>
   <div id="stage">
-    <img id="img" alt="camera frame">
+    <img id="img" alt="camera">
     <canvas id="overlay"></canvas>
   </div>
 
   <div class="panel">
     <div class="row">
-      <input id="url" type="text" placeholder="http://PLAYER:20200/image">
-      <button id="load">Load URL</button>
-      <label class="pill"><input id="live" type="checkbox"> live</label>
-    </div>
-    <div class="row">
-      <input id="file" type="file" accept="image/*">
-    </div>
-    <div class="row">
-      <span class="pill">frame: <span id="dim">-</span></span>
-      <span class="pill">zones: <span id="count">0</span></span>
+      <span class="pill">frame <span id="dim">-</span></span>
+      <span class="pill">zones <span id="count">0</span></span>
       <button id="clear">Clear all</button>
     </div>
 
-    <table id="tbl">
-      <thead><tr><th>id</th><th>x</th><th>y</th><th>w</th><th>h</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <table><thead><tr><th>id</th><th>x</th><th>y</th><th>w</th><th>h</th><th></th></tr></thead>
+    <tbody id="rows"></tbody></table>
 
     <div class="row">
-      <label class="pill">load config.json: <input id="cfgfile" type="file" accept=".json,application/json"></label>
-      <span id="cfgstate" class="muted">no config loaded</span>
-    </div>
-    <div class="row" id="serverRow" style="display:none">
-      <button id="save" class="primary">Save to player</button>
-      <button id="saveRestart" class="primary">Save &amp; Restart</button>
-      <span id="savestate" class="muted"></span>
-    </div>
-    <div class="row">
-      <button id="dlConfig">Download config.json</button>
-      <button id="copyRoi">Copy roi block</button>
-    </div>
-    <pre id="out">(load config.json, then draw boxes)</pre>
-
-    <div class="steps">
-      <b>Workflow (one file):</b>
-      <ol>
-        <li>Load the player's current <code>config.json</code> (scp it down first). Its existing zones appear as editable boxes.</li>
-        <li>Draw / delete boxes to match the screens.</li>
-        <li><b>Download config.json</b> &mdash; the same file with your zones swapped in (everything else preserved).</li>
-        <li>Copy it back and restart:<br>
-          <code>scp config.json brightsign@PLAYER:/storage/sd/configs/config.json</code><br>
-          <code>/var/volatile/bsext/ext_npu_anomaly/bsext_init restart</code></li>
-      </ol>
-      <div class="muted">Boxes must lie fully inside the frame &mdash; out-of-bounds ROIs are dropped by the capture crop.</div>
+      <button id="save" class="primary">Save</button>
+      <button id="restart" class="warn">Restart</button>
+      <span id="state" class="muted"></span>
     </div>
   </div>
 </main>
@@ -101,218 +65,98 @@
   var img = document.getElementById('img');
   var overlay = document.getElementById('overlay');
   var ctx = overlay.getContext('2d');
-  var dimEl = document.getElementById('dim');
-  var countEl = document.getElementById('count');
-  var outEl = document.getElementById('out');
-  var tbody = document.querySelector('#tbl tbody');
+  var stateEl = document.getElementById('state');
 
-  // Boxes are stored in NATURAL (camera-frame) pixels so ids/output are stable
-  // regardless of how large the image is displayed.
-  var boxes = [];
-  var loadedConfig = null;    // the config.json being edited (round-tripped)
-  var liveTimer = null;
-  var drag = null;            // { x0,y0,x1,y1 } in displayed-canvas px
+  var boxes = [];        // frame (natural) pixels
+  var config = null;     // the live config.json
+  var drag = null;
 
-  function naturalW() { return img.naturalWidth || 0; }
-  function naturalH() { return img.naturalHeight || 0; }
+  function nW() { return img.naturalWidth || 0; }
+  function nH() { return img.naturalHeight || 0; }
 
   function fit() {
-    overlay.width = img.clientWidth;
-    overlay.height = img.clientHeight;
-    overlay.style.width = img.clientWidth + 'px';
-    overlay.style.height = img.clientHeight + 'px';
+    overlay.width = img.clientWidth; overlay.height = img.clientHeight;
+    overlay.style.width = img.clientWidth + 'px'; overlay.style.height = img.clientHeight + 'px';
     redraw();
   }
-
-  // natural(frame) px -> displayed px
   function toDisplay(b) {
-    var sx = img.clientWidth / (naturalW() || 1);
-    var sy = img.clientHeight / (naturalH() || 1);
+    var sx = img.clientWidth / (nW() || 1), sy = img.clientHeight / (nH() || 1);
     return { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy };
   }
-
   function redraw() {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
-    var tagged = ZP.buildRoiConfig(boxes).tvs;        // ordered + id'd for display
-    ctx.lineWidth = 2;
-    ctx.font = '13px system-ui, sans-serif';
-    tagged.forEach(function (t) {
+    var tvs = ZP.buildRoiConfig(boxes).tvs;
+    ctx.lineWidth = 2; ctx.font = '13px system-ui';
+    tvs.forEach(function (t) {
       var d = toDisplay(t);
-      ctx.strokeStyle = '#38d39f';
-      ctx.strokeRect(d.x, d.y, d.w, d.h);
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(d.x, d.y, 34, 16);
-      ctx.fillStyle = '#38d39f';
-      ctx.fillText(t.id, d.x + 3, d.y + 12);
-    });
-    if (drag) {
       ctx.strokeStyle = '#ffd166';
-      ctx.strokeRect(drag.x0, drag.y0, drag.x1 - drag.x0, drag.y1 - drag.y0);
-    }
-    refreshPanel(tagged);
-  }
-
-  function refreshPanel(tagged) {
-    countEl.textContent = tagged.length;
-    dimEl.textContent = naturalW() && naturalH() ? (naturalW() + ' x ' + naturalH()) : '-';
-    tbody.innerHTML = '';
-    tagged.forEach(function (t, i) {
-      var tr = document.createElement('tr');
-      tr.innerHTML = '<td>' + t.id + '</td><td>' + t.x + '</td><td>' + t.y +
-                     '</td><td>' + t.w + '</td><td>' + t.h + '</td>';
-      var td = document.createElement('td');
-      var del = document.createElement('button');
-      del.textContent = 'x';
-      del.onclick = function () { boxes.splice(i, 1); redraw(); };
-      td.appendChild(del); tr.appendChild(td);
-      tbody.appendChild(tr);
+      ctx.strokeRect(d.x, d.y, d.w, d.h);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(d.x, d.y, 34, 16);
+      ctx.fillStyle = '#ffd166'; ctx.fillText(t.id, d.x + 3, d.y + 12);
     });
-    var roi = ZP.buildRoiConfig(boxes);
-    outEl.textContent = tagged.length
-      ? '"roi": ' + JSON.stringify(roi, null, 2)
-      : '(draw some boxes)';
+    if (drag) { ctx.strokeStyle = '#38d39f'; ctx.strokeRect(drag.x0, drag.y0, drag.x1 - drag.x0, drag.y1 - drag.y0); }
+    document.getElementById('count').textContent = tvs.length;
+    document.getElementById('dim').textContent = nW() ? (nW() + 'x' + nH()) : '-';
+    var tb = document.getElementById('rows'); tb.innerHTML = '';
+    tvs.forEach(function (t, i) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + t.id + '</td><td>' + t.x + '</td><td>' + t.y + '</td><td>' + t.w + '</td><td>' + t.h + '</td>';
+      var td = document.createElement('td'), b = document.createElement('button');
+      b.textContent = 'x'; b.onclick = function () { boxes.splice(i, 1); redraw(); };
+      td.appendChild(b); tr.appendChild(td); tb.appendChild(tr);
+    });
   }
 
-  // --- drawing ---
-  function canvasPos(ev) {
-    var r = overlay.getBoundingClientRect();
-    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
-  }
-  overlay.addEventListener('mousedown', function (ev) {
-    var p = canvasPos(ev); drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
-  });
-  overlay.addEventListener('mousemove', function (ev) {
-    if (!drag) return; var p = canvasPos(ev); drag.x1 = p.x; drag.y1 = p.y; redraw();
-  });
+  function pos(ev) { var r = overlay.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; }
+  overlay.addEventListener('mousedown', function (e) { var p = pos(e); drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; });
+  overlay.addEventListener('mousemove', function (e) { if (!drag) return; var p = pos(e); drag.x1 = p.x; drag.y1 = p.y; redraw(); });
   window.addEventListener('mouseup', function () {
     if (!drag) return;
     var dx = Math.min(drag.x0, drag.x1), dy = Math.min(drag.y0, drag.y1);
     var dw = Math.abs(drag.x1 - drag.x0), dh = Math.abs(drag.y1 - drag.y0);
     drag = null;
-    if (dw < 6 || dh < 6) { redraw(); return; }     // ignore stray clicks
-    // displayed px -> natural(frame) px, then clamp to the frame.
-    var sx = (naturalW() || 1) / img.clientWidth;
-    var sy = (naturalH() || 1) / img.clientHeight;
-    var frame = ZP.scaleBox({ x: dx, y: dy, w: dw, h: dh }, sx, sy);
-    var c = ZP.clampToFrame(frame, naturalW(), naturalH());
+    if (dw < 6 || dh < 6) { redraw(); return; }
+    var sx = (nW() || 1) / img.clientWidth, sy = (nH() || 1) / img.clientHeight;
+    var c = ZP.clampToFrame(ZP.scaleBox({ x: dx, y: dy, w: dw, h: dh }, sx, sy), nW(), nH());
     boxes.push({ x: c.x, y: c.y, w: c.w, h: c.h });
     redraw();
   });
+  document.getElementById('clear').onclick = function () { boxes = []; redraw(); };
 
-  // --- image sources ---
-  function setSrc(u) { img.src = u; }
   img.addEventListener('load', fit);
   window.addEventListener('resize', fit);
 
-  document.getElementById('load').onclick = function () {
-    var u = document.getElementById('url').value.trim();
-    if (u) setSrc(u);
-  };
-  document.getElementById('file').onchange = function (ev) {
-    var f = ev.target.files[0]; if (f) setSrc(URL.createObjectURL(f));
-  };
-  document.getElementById('live').onchange = function (ev) {
-    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
-    if (ev.target.checked) {
-      var base = document.getElementById('url').value.trim();
-      if (!base) { ev.target.checked = false; return; }
-      liveTimer = setInterval(function () {
-        setSrc(base + (base.indexOf('?') < 0 ? '?' : '&') + '_t=' + Date.now());
-      }, 700);
-    }
-  };
-  document.getElementById('clear').onclick = function () { boxes = []; redraw(); };
+  document.getElementById('save').onclick = function () { save(false); };
+  document.getElementById('restart').onclick = function () { save(true); };
 
-  // --- output ---
-  document.getElementById('copyRoi').onclick = function () {
-    var text = '"roi": ' + JSON.stringify(ZP.buildRoiConfig(boxes), null, 2);
-    navigator.clipboard && navigator.clipboard.writeText(text);
-  };
-  document.getElementById('cfgfile').onchange = function (ev) {
-    var f = ev.target.files[0]; if (!f) return;
-    var rd = new FileReader();
-    rd.onload = function () {
-      try { loadedConfig = JSON.parse(rd.result); }
-      catch (e) { loadedConfig = null; alert('Not valid JSON'); return; }
-      boxes = ZP.configToBoxes(loadedConfig);        // pre-fill existing zones as editable boxes
-      document.getElementById('cfgstate').textContent =
-        'loaded (' + boxes.length + ' existing zone' + (boxes.length === 1 ? '' : 's') + ')';
-      redraw();
-    };
-    rd.readAsText(f);
-  };
-  document.getElementById('dlConfig').onclick = function () {
-    if (!loadedConfig) { alert('Load config.json first (so the whole file is preserved, not just the zones).'); return; }
-    var cfg = ZP.mergeRoi(loadedConfig, boxes);
-    var blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = 'config.json'; a.click();
-  };
-
-  // --- server mode: save straight to the live config on the player ---
-  var savestate = document.getElementById('savestate');
-  function saveToPlayer(thenRestart) {
-    if (!loadedConfig) { alert('No config loaded from the player.'); return; }
-    savestate.textContent = 'saving...';
-    var cfg = ZP.mergeRoi(loadedConfig, boxes);
-    fetch('/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cfg, null, 2),
-    }).then(function (r) {
-      if (!r.ok) throw new Error('save failed (' + r.status + ')');
-      loadedConfig = cfg;                      // keep local copy in sync
-      if (!thenRestart) { savestate.textContent = 'saved'; return null; }
-      savestate.textContent = 'saved, restarting...';
-      return fetch('/restart', { method: 'POST' });
-    }).then(function (r) {
-      if (r && !r.ok) throw new Error('restart failed (' + r.status + ')');
-      if (r) savestate.textContent = 'saved + restart triggered';
-    }).catch(function (e) { savestate.textContent = String(e.message || e); });
+  function save(thenRestart) {
+    if (!config) { stateEl.textContent = 'no config loaded'; return; }
+    stateEl.textContent = 'saving...';
+    fetch('/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify(ZP.mergeRoi(config, boxes), null, 2) })
+      .then(function (r) {
+        if (!r.ok) throw new Error('save failed (' + r.status + ')');
+        config = ZP.mergeRoi(config, boxes);
+        if (!thenRestart) { stateEl.textContent = 'saved'; return null; }
+        stateEl.textContent = 'saved, restarting...';
+        return fetch('/restart', { method: 'POST' });
+      })
+      .then(function (r) { if (r) stateEl.textContent = r.ok ? 'restarting' : 'restart failed'; })
+      .catch(function (e) { stateEl.textContent = String(e.message || e); });
   }
-  document.getElementById('save').onclick = function () { saveToPlayer(false); };
-  document.getElementById('saveRestart').onclick = function () { saveToPlayer(true); };
 
-  // --- init: prefer server mode (page served by the on-player config-server) ---
-  (function () {
-    var q = new URLSearchParams(location.search);
-    var qUrl = q.get('url');
+  // Load the live config + camera from the player this page is served by.
+  var host = location.hostname || 'localhost';
+  function refreshImage() { img.src = 'http://' + host + ':20200/image?_t=' + Date.now(); }
+  refreshImage(); setInterval(refreshImage, 1000);
 
-    function setImageDefault() {
-      var el = document.getElementById('url');
-      if (qUrl) { el.value = qUrl; }
-      else if (location.protocol.indexOf('http') === 0 && location.hostname) {
-        el.value = location.protocol + '//' + location.hostname + ':20200/image';
-      }
-    }
-    function startLive() {
-      var cb = document.getElementById('live'); cb.checked = true; cb.dispatchEvent(new Event('change'));
-    }
-
-    // Try the on-player config endpoint. If it answers, we are hosted on the
-    // player: load the live config, reveal Save/Save & Restart, and default the
-    // image to this player's camera stream.
-    fetch('/config', { method: 'GET' }).then(function (r) {
-      if (!r.ok) throw new Error('no server config');
-      return r.json();
-    }).then(function (cfg) {
-      loadedConfig = cfg;
-      boxes = ZP.configToBoxes(loadedConfig);
-      document.getElementById('serverRow').style.display = '';
-      document.getElementById('cfgstate').textContent =
-        'loaded from player (' + boxes.length + ' zone' + (boxes.length === 1 ? '' : 's') + ')';
-      setImageDefault();
-      var u = document.getElementById('url').value;
-      if (u) { setSrc(u); startLive(); }
-      redraw();
-    }).catch(function () {
-      // Standalone (file:// or no server): keep the file-drop workflow.
-      setImageDefault();
-      var u = document.getElementById('url').value;
-      if (u) setSrc(u);
-      if (q.get('live') === '1') startLive();
-    });
-  })();
+  fetch('/config').then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (cfg) {
+      if (!cfg) { stateEl.textContent = 'could not load config'; return; }
+      config = cfg; boxes = ZP.configToBoxes(cfg); redraw();
+      stateEl.textContent = boxes.length + ' zone(s) loaded';
+    })
+    .catch(function () { stateEl.textContent = 'could not load config'; });
 })();
 </script>
 </body>
