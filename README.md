@@ -14,61 +14,51 @@ __Implementation__: Main entry point in `src/main.cpp`, supporting modules in `s
 
 ## Build
 
-This project uses a comprehensive CMake-based build system copied from [brightsign-npu-gaze-extension-ng](https://github.com/BrightSign-Playground/brightsign-npu-gaze-extension-ng).
+The build is driven by a `Makefile`. The cross SDK, the RKNN toolkit, and the
+`rknn_tk2` model-compile image are **not** vendored here: they are provisioned
+once per build box by the sibling [`brightsign-sdk-builder`](https://github.com/BrightSign-Playground/brightsign-sdk-builder)
+repo into a shared cache outside this repo (default `../argus-build-cache`,
+override with `ARGUS_CACHE_DIR`). This project compiles its own per-SoC models
+into that cache and cross-compiles against the cached SDK.
 
-**Recommended: full automated build (downloads SDK + builds all platforms)**
-
-```bash
-./scripts/runall.sh --auto
-```
-
-`--auto` runs all steps without prompting: downloads the BrightSign OS source,
-builds the SDK in Docker, installs it to `./sdk/`, applies Rockchip library
-patches, then builds the `anomaly_detection` binary for all platforms.
-
-**Or build manually for a specific platform after the SDK is already installed:**
+**One-time per build box** — populate the shared cache:
 
 ```bash
-./build-apps XT5       # RK3588
-./build-apps LS5       # RK3568
-./build-apps Firebird  # RK3576
+cd ../brightsign-sdk-builder && make build   # builds SDK + toolkit + rknn_tk2 into the cache
 ```
 
-**Compile the MobileNetV2 ONNX model to RKNN format (required for NPU inference):**
+Check what the cache holds at any time:
 
 ```bash
-./compile-models          # Compile for all platforms
-./compile-models XT5      # Compile for XT5/RK3588 only
-./compile-models LS5      # Compile for LS5/RK3568 only
-./compile-models Firebird # Compile for Firebird/RK3576 only
+make cache-info
 ```
 
-If no calibration dataset exists at `toolkit/calibration_dataset.txt`, a synthetic
-one is generated automatically (suitable for testing). For production deployments,
-replace it with real frames from your video content:
+**Full build (fetch SDK from cache, prep, compile models, cross-compile, package):**
 
 ```bash
-python3 tools/create_calibration_dataset.py --videos ref1.mp4 ref2.mp4
+make build
 ```
 
-**Then create the deployable extension package:**
+**Individual steps:**
 
 ```bash
-./package                        # Package all platforms (dev + extension zips)
-./package --ext-only             # Extension package only (production)
-./package --soc RK3588           # Package a specific SOC only
-./package --ext-only --soc RK3588 --verify  # Extension + post-package validation
+make fetch-sdk      # ensure the cross SDK is present in the shared cache
+make prep           # fetch the RKNN header + runtime into include/
+make build-models   # compile per-SoC .rknn into <cache>/models (needs docker)
+make build-engine   # cross-compile + install for each SoC (build_<soc>/, install/<SOC>/)
+make package        # stage all SoCs -> dev zip + LVM extension zip
+make run-tests      # host unit tests (no cross SDK needed)
+make clean          # remove build_*/, install/, staging/, zips, fetched headers
 ```
 
-This produces `anomaly-detection-ext-<timestamp>.zip`.
+`make build-models` generates a synthetic INT8 calibration dataset
+(testing-grade) if none exists. For production deployments, replace it with real
+frames from your video content (`python3 tools/create_calibration_dataset.py
+--videos ref1.mp4 ref2.mp4`).
 
-Other `runall.sh` options:
-
-```bash
-./scripts/runall.sh --help    # Show all options
-./scripts/runall.sh --clean   # Remove all generated files, build dirs, Docker images
-./scripts/runall.sh --skip-arch-check --auto  # Skip x86_64 check (for CI/testing)
-```
+`make package` produces `anomaly-detection-dev-<timestamp>.zip` and
+`anomaly-detection-ext-<timestamp>.zip`. The `package` script still accepts
+`--ext-only`, `--soc RK3588`, and `--verify` if you invoke it directly.
 
 See [DESIGN.md](DESIGN.md) for detailed build documentation.
 
@@ -490,19 +480,17 @@ brightsign-npu-anomaly-detection/
 │   ├── Anomaly_Albertsons.mp4
 │   ├── Anomaly_Wallmart.mp4
 │   └── make_mosaic_rtsp_health_5tv_BlackOnly.sh
-├── scripts/                      # Build and deployment scripts
-│   ├── runall.sh                 # Full automated build (SDK + all platforms)
-│   ├── build_image_server.sh
-│   ├── clean_build.sh
-│   └── validate_bbappend.sh
-├── toolkit/                      # RKNN model compilation toolkit
+├── scripts/                      # Build helper scripts (invoked by the Makefile)
+│   ├── lib/cache.sh              # Shared build-cache path resolver
+│   ├── fetch-sdk.sh              # Ensure the cross SDK is in the shared cache
+│   ├── prep.sh                   # Fetch RKNN header + runtime into include/
+│   ├── build-models.sh           # Compile per-SoC .rknn into <cache>/models
+│   └── build_image_server.sh
 ├── tools/                        # Host tools (reference builder, etc.)
-├── CMakeLists.txt                # Unified CMake build configuration
-├── build-apps                    # Multi-platform build script
-├── compile-models                # RKNN model compilation script
+├── Makefile                      # Build entry point (fetch-sdk/build/package/...)
+├── CMakeLists.txt                # CMake cross-build configuration
 ├── package                       # Extension packaging script
 ├── gst-env.sh                    # GStreamer environment setup
-├── Dockerfile                    # Docker build environment
 ├── DESIGN.md                     # System design and architecture
 ├── README.md                     # This file
 └── manifest-config.template.json # Deployment manifest template
