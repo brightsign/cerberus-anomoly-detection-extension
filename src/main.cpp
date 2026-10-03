@@ -1,3 +1,4 @@
+#include "wvm/camera_autodetect.hpp"
 #include "wvm/config.hpp"
 #include "wvm/logger.hpp"
 #include "wvm/pipeline.hpp"
@@ -169,6 +170,12 @@ int main(int argc, char** argv) {
     return 2;
   }
   fprintf(stderr, "[MAIN] Config loaded successfully\n");
+
+  // Resolve USB-camera sentinel tokens to a concrete /dev/videoN via V4L2
+  // auto-detection before anything branches on the device string. rtsp:// URLs
+  // and explicit paths pass through unchanged.
+  cfg.device.camera_device = wvm::resolve_camera_device(cfg.device.camera_device);
+
   fprintf(stderr, "[MAIN] camera_device: '%s'\n", cfg.device.camera_device.c_str());
   fprintf(stderr, "[MAIN] mqtt.host: '%s', mqtt.enabled: %d\n", cfg.mqtt.host.c_str(), (int)cfg.mqtt.enabled);
 

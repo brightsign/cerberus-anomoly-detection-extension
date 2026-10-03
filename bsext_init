@@ -26,12 +26,13 @@ MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
 # defaults -- these can be overridden by environment variables
 DISABLE_AUTO_START=false
 
-# Auto-detection will automatically find the best available video source:
-# Priority: Registry settings > Auto-detected USB cameras > Auto-detected HDMI/default device
-# 
-# Auto-detection preference:
-#   1. USB cameras: /dev/video1, /dev/video2, etc. (checked first)
-#   2. HDMI/default: /dev/video0 (used if no USB cameras found)
+# Video source selection:
+# Priority: Registry setting > app-side V4L2 auto-detection (usb_camera sentinel)
+#
+# When no registry value is set, the shell passes the "usb_camera" sentinel and
+# the application auto-detects the device (src/wvm/camera_autodetect.cpp): it
+# probes /dev/video* in ascending order and selects the first node advertising
+# V4L2 VIDEO_CAPTURE + STREAMING, falling back to /dev/video0.
 #
 # Registry settings (optional):
 #   bsext-anomaly-video-device : Video device path (e.g., /dev/video0, /dev/video1)
@@ -118,53 +119,23 @@ detect_video_sources() {
     echo "$DETECTED_SOURCES"
 }
 
-# Function to get the video source from registry or auto-detect
+# Function to get the video source from the registry, or the usb_camera sentinel.
+#
+# Device auto-detection lives in the application (see src/wvm/camera_autodetect.cpp),
+# which resolves the usb_camera sentinel to a concrete /dev/videoN via V4L2
+# VIDIOC_QUERYCAP probing. The shell no longer scans /dev/video*; it only chooses
+# between an explicit registry value and the sentinel.
 get_video_source() {
     local video_source
     video_source=$(registry extension ${DAEMON_NAME}-video-device)
     echo "Video source from registry: '$video_source'" >&2
-    
+
     if [ -z "$video_source" ]; then
-        # Registry is empty, try auto-detection
-        echo "Registry empty, attempting auto-detection..." >&2
-        echo "Listing all video devices:" >&2
-        ls -la /dev/video* 2>&1 | grep -E "^crw" >&2
-        
-        # Check for video devices in priority order
-        # Priority 1: USB cameras (video1, video2, etc.) - skip video0 as it's usually HDMI
-        echo "Checking for USB cameras (video1-9)..." >&2
-        for video_dev in /dev/video{1..9}; do
-            if [ -c "$video_dev" ]; then
-                # Extract video device number (e.g., "1" from "/dev/video1")
-                local dev_num=$(echo "$video_dev" | grep -o '[0-9]$')
-                local device_name=$(cat /sys/class/video4linux/video${dev_num}/name 2>/dev/null)
-                
-                echo "  Found $video_dev: $device_name" >&2
-                
-                # Check if it's a USB camera (not HDMI receiver)
-                if [ -n "$device_name" ] && ! echo "$device_name" | grep -qi "hdmi"; then
-                    video_source="$video_dev"
-                    echo "Auto-detected USB camera: $video_source ($device_name)" >&2
-                    break
-                fi
-            fi
-        done
-        
-        # Priority 2: If no USB camera found, check video0 (HDMI or first camera)
-        if [ -z "$video_source" ] && [ -c "/dev/video0" ]; then
-            local device_name=$(cat /sys/class/video4linux/video0/name 2>/dev/null)
-            echo "Checking /dev/video0 (${device_name})..." >&2
-            video_source="/dev/video0"
-            echo "Using video device: $video_source ($device_name)" >&2
-        fi
-        
-        # Fallback: default to /dev/video0 if nothing detected
-        if [ -z "$video_source" ]; then
-            video_source="/dev/video0"
-            echo "No devices detected, defaulting to: $video_source" >&2
-        fi
+        # Registry unset: hand the app the sentinel so it auto-detects a USB camera.
+        video_source="usb_camera"
+        echo "Registry empty, using sentinel for app-side auto-detection: ${video_source}" >&2
     fi
-    
+
     echo "$video_source"
 }
 
@@ -792,8 +763,8 @@ case "$ACTION" in
         echo ""
         echo "Configuration via BrightSign registry:"
         echo "  bsext-anomaly-video-device      Video device path (e.g., /dev/video0, /dev/video1)"
-        echo "                                   If not set, auto-detection will find available cameras"
-        echo "                                   Priority: USB cameras (/dev/video1+) > HDMI/default (/dev/video0)"
+        echo "                                   If not set, the app auto-detects via V4L2:"
+        echo "                                   first /dev/video* with CAPTURE+STREAMING (ascending), else /dev/video0"
         echo "  bsext-anomaly-rtsp-server       RTSP server IP:port (e.g., 192.168.0.203:8554)"
         echo "  bsext-anomaly-disable-auto-start  Disable automatic startup (true/false)"
         echo ""

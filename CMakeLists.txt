@@ -176,6 +176,7 @@ set(ANOMALY_SOURCES
   src/main.cpp
   src/wvm/config.cpp
   src/wvm/logger.cpp
+  src/wvm/camera_autodetect.cpp
   src/wvm/v4l2_capture.cpp
   src/wvm/gst_rtsp_capture.cpp
   src/wvm/roi.cpp
