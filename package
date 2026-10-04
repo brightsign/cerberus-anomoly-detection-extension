@@ -58,7 +58,7 @@ EXTENSION_PACKAGE="anomaly-detection-ext-${TIMESTAMP}.zip"
 # Supported SOCs and their mappings
 declare -A SOC_PLATFORMS=(
     ["RK3588"]="XT5"
-    ["RK3576"]="Firebird" 
+    ["RK3576"]="XS6/XD6/HD6"
     ["RK3568"]="LS5"
 )
 
@@ -80,7 +80,7 @@ usage() {
     echo ""
     echo "SOC Support:"
     echo "  RK3588  -> XT-5 players (XT1145, XT2145)"
-    echo "  RK3576  -> Firebird development boards"
+    echo "  RK3576  -> XS6/XD6/HD6 players"
     echo "  RK3568  -> LS-5 players (LS445)"
     echo ""
     echo "Model Support:"
@@ -502,9 +502,9 @@ generate_manifest() {
             player_items+=("    {\"series\": \"5\", \"models\": [\"LS445\"], \"features\": [\"npu\"]}")
         fi
         
-        # RK3576 -> Firebird development boards
+        # RK3576 -> Series 6 players (XS6, XD6, HD6)
         if [[ "$soc_array" =~ "RK3576" ]]; then
-            player_items+=("    {\"series\": \"firebird\", \"models\": [\"dev\"], \"features\": [\"npu\"], \"experimental\": true}")
+            player_items+=("    {\"series\": \"6\", \"models\": [\"XS6\", \"XD6\", \"HD6\"], \"features\": [\"npu\"]}")
         fi
         
         if [[ ${#player_items[@]} -gt 0 ]]; then

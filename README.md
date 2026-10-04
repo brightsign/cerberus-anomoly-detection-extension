@@ -495,9 +495,9 @@ brightsign-npu-anomaly-detection/
 ### Build Artifacts (Generated)
 
 ```ini
-build_xt5/                        # XT5/RK3588 build directory
-build_ls5/                        # LS5/RK3568 build directory
-build_firebird/                   # Firebird/RK3576 build directory
+build_rk3588/                     # RK3588 (XT5) build directory
+build_rk3568/                     # RK3568 (LS5) build directory
+build_rk3576/                     # RK3576 (XS6/XD6/HD6) build directory
 install/                          # Installation directories
 ├── RK3588/
 │   ├── bin/

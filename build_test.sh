@@ -3,36 +3,36 @@
 # Build script for MobileNetV2 test application
 # 
 # Usage:
-#   ./build_test.sh [XT5|LS5|Firebird]
+#   ./build_test.sh [RK3588|RK3568|RK3576]   (model aliases: XT5, LS5, XS6/XD6/HD6)
 #
 
 set -e
 
 # Determine platform
 if [ $# -eq 0 ]; then
-    PLATFORM="XT5"
-    echo "No platform specified, defaulting to XT5"
+    PLATFORM="RK3588"
+    echo "No platform specified, defaulting to RK3588"
 else
     PLATFORM=$1
 fi
 
-# Map platform to SOC
+# Map platform (SOC code or player-model alias) to SOC
 case "$PLATFORM" in
-    XT5)
+    RK3588|XT5)
         SOC="RK3588"
         SDK_TARGET="rk3588"
         ;;
-    LS5)
+    RK3568|LS5)
         SOC="RK3568"
         SDK_TARGET="rk3568"
         ;;
-    Firebird)
+    RK3576|XS6|XD6|HD6)
         SOC="RK3576"
         SDK_TARGET="rk3576"
         ;;
     *)
         echo "ERROR: Unknown platform: $PLATFORM"
-        echo "Usage: $0 [XT5|LS5|Firebird]"
+        echo "Usage: $0 [RK3588|RK3568|RK3576]  (aliases: XT5, LS5, XS6/XD6/HD6)"
         exit 1
         ;;
 esac
