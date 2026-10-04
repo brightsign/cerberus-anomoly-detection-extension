@@ -3,7 +3,7 @@
 # Build script for MobileNetV2 test application
 # 
 # Usage:
-#   ./build_test.sh [RK3588|RK3568|RK3576]   (model aliases: XT5, LS5, XS6/XD6/HD6)
+#   ./build_test.sh [RK3588|RK3568|RK3576]   (model aliases: XT5, LS5, XS6/XD6)
 #
 
 set -e
@@ -26,13 +26,13 @@ case "$PLATFORM" in
         SOC="RK3568"
         SDK_TARGET="rk3568"
         ;;
-    RK3576|XS6|XD6|HD6)
+    RK3576|XS6|XD6)
         SOC="RK3576"
         SDK_TARGET="rk3576"
         ;;
     *)
         echo "ERROR: Unknown platform: $PLATFORM"
-        echo "Usage: $0 [RK3588|RK3568|RK3576]  (aliases: XT5, LS5, XS6/XD6/HD6)"
+        echo "Usage: $0 [RK3588|RK3568|RK3576]  (aliases: XT5, LS5, XS6/XD6)"
         exit 1
         ;;
 esac

@@ -29,7 +29,7 @@ TOOLKIT_DIR := $(shell $(CACHE_SH) toolkit)
 MODELS_DIR  := $(shell $(CACHE_SH) models)
 export ARGUS_CACHE_DIR
 
-# Per-SoC install dirs (RK3588=XT5, RK3576=XS6/XD6/HD6, RK3568=LS5). Build dirs are
+# Per-SoC install dirs (RK3588=XT5, RK3576=XS6/XD6, RK3568=LS5). Build dirs are
 # build_<soc> (lowercase).
 SOC_LIST ?= RK3588 RK3576 RK3568
 
