@@ -17,6 +17,7 @@ argus-ext*.zip
 argus-dev*.zip
 anomaly-detection-ext-*.zip
 anomaly-detection-dev-*.zip
+/install-on-player.sh
 brightsign-*-src-*.tar.gz
 .env
 .envrc

@@ -76,27 +76,26 @@ package: build-engine build-models  ## Stage all SoCs and produce the dev + LVM 
 
 build: package       ## Full build: fetch SDK, prep, compile models, cross-compile, package
 
-copy:                ## scp the most recent extension zip to the player (BS_PLAYER/BS_PASSWORD, e.g. in .envrc)
+copy:                ## scp the newest ext zip + install-on-player.sh to the player (BS_PLAYER/BS_PASSWORD in .envrc)
 	@set -e; \
 	[ -f .envrc ] && . ./.envrc || true; \
-	: "$${BS_PLAYER:?set BS_PLAYER (player ip/hostname), e.g. in .envrc}"; \
+	: "$${BS_PLAYER:?set BS_PLAYER (player ip/hostname) in .envrc}"; \
+	: "$${BS_PASSWORD:?set BS_PASSWORD (ssh password for user brightsign) in .envrc}"; \
+	command -v sshpass >/dev/null 2>&1 || { echo "ERROR: sshpass not installed -- 'sudo apt install sshpass'" >&2; exit 1; }; \
 	zip=$$(ls -t anomaly-detection-ext-*.zip 2>/dev/null | head -1); \
-	[ -n "$$zip" ] || { echo "No anomaly-detection-ext-*.zip found -- run 'make package' first." >&2; exit 1; }; \
-	echo "Copying $$zip -> brightsign@$${BS_PLAYER}:/storage/sd/"; \
-	: "NOTE: no 'scp -O'. The player's SSH login is the BrightSign REPL, not a"; \
-	: "Unix shell; legacy SCP (-O) runs 'scp -t' through that REPL and fails with"; \
-	: "'Unknown command: -c scp -t'. Default scp uses the SFTP subsystem, which"; \
-	: "dropbear serves independently of the REPL, so it works."; \
-	scp_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"; \
-	if command -v sshpass >/dev/null 2>&1 && [ -n "$${BS_PASSWORD:-}" ]; then \
-		sshpass -p "$${BS_PASSWORD}" scp $$scp_opts "$$zip" "brightsign@$${BS_PLAYER}:/storage/sd/"; \
-	else \
-		echo "(sshpass unavailable or BS_PASSWORD unset -- you'll be prompted for the password)"; \
-		scp $$scp_opts "$$zip" "brightsign@$${BS_PLAYER}:/storage/sd/"; \
-	fi; \
+	[ -n "$$zip" ] || { echo "ERROR: no anomaly-detection-ext-*.zip found -- run 'make package' first." >&2; exit 1; }; \
+	[ -f install-on-player.sh ] || { echo "ERROR: install-on-player.sh missing -- run 'make package' first." >&2; exit 1; }; \
+	echo "Copying $$zip + install-on-player.sh -> brightsign@$${BS_PLAYER}:/storage/sd/"; \
+	: "No 'scp -O': the player's SSH login is the BrightSign REPL, not a Unix shell;"; \
+	: "legacy SCP (-O) runs 'scp -t' through the REPL -> 'Unknown command: -c scp -t'."; \
+	: "Default scp uses the SFTP subsystem, which dropbear serves independently."; \
+	: "No 'scp -p' either: the player's SFTP server rejects setting remote file"; \
+	: "attributes ('remote fsetstat: Permission denied' on /storage/sd)."; \
+	sshpass -p "$${BS_PASSWORD}" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+		"$$zip" install-on-player.sh "brightsign@$${BS_PLAYER}:/storage/sd/"; \
 	echo ""; \
-	echo "Copied. To install, SSH to the player, descend to the root shell, then:"; \
-	echo "  cd /usr/local && unzip -o /storage/sd/$$zip && bash ./ext_npu_anomaly_install-lvm.sh && exit"
+	echo "Copied. Install from the player's ROOT shell (Ctrl-C,Enter -> exit -> exit):"; \
+	echo "  sh /storage/sd/install-on-player.sh"
 
 run-tests:           ## Run host unit tests (no cross SDK needed)
 	bash test/cache_sh_test.sh
@@ -111,7 +110,7 @@ run-tests:           ## Run host unit tests (no cross SDK needed)
 test: run-tests      ## Alias for run-tests
 
 clean:               ## Remove build artifacts (build_*/ install/ staging/ zips + prep headers)
-	rm -rf build_rk* build_test_* install staging *.zip
+	rm -rf build_rk* build_test_* install staging *.zip install-on-player.sh
 	bash scripts/prep.sh clean 2>/dev/null || true
 
 .PHONY: help cache-info fetch-sdk prep build-models build-engine package build copy run-tests test clean
