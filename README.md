@@ -81,8 +81,11 @@ make copy
 
 `make copy` sources `.envrc`, picks the newest `anomaly-detection-ext-*.zip`, and
 `scp`s it to `brightsign@$BS_PLAYER:/storage/sd/`. If `sshpass` is installed it
-uses `$BS_PASSWORD`; otherwise it prompts. (It uses `scp -O` because the player's
-dropbear SSH needs the legacy SCP protocol.)
+uses `$BS_PASSWORD`; otherwise it prompts. (It deliberately does **not** pass
+`scp -O`: the player's SSH login is the BrightSign REPL, not a Unix shell, so
+legacy SCP would run `scp -t` through the REPL and fail with
+`Unknown command: -c scp -t`. Default `scp` uses the SFTP subsystem, which
+dropbear serves independently of the REPL.)
 
 Installing is still a manual step on the player (it needs the root shell). `make
 copy` prints the exact commands; in the player's root shell:

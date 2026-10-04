@@ -83,7 +83,11 @@ copy:                ## scp the most recent extension zip to the player (BS_PLAY
 	zip=$$(ls -t anomaly-detection-ext-*.zip 2>/dev/null | head -1); \
 	[ -n "$$zip" ] || { echo "No anomaly-detection-ext-*.zip found -- run 'make package' first." >&2; exit 1; }; \
 	echo "Copying $$zip -> brightsign@$${BS_PLAYER}:/storage/sd/"; \
-	scp_opts="-O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"; \
+	: "NOTE: no 'scp -O'. The player's SSH login is the BrightSign REPL, not a"; \
+	: "Unix shell; legacy SCP (-O) runs 'scp -t' through that REPL and fails with"; \
+	: "'Unknown command: -c scp -t'. Default scp uses the SFTP subsystem, which"; \
+	: "dropbear serves independently of the REPL, so it works."; \
+	scp_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"; \
 	if command -v sshpass >/dev/null 2>&1 && [ -n "$${BS_PASSWORD:-}" ]; then \
 		sshpass -p "$${BS_PASSWORD}" scp $$scp_opts "$$zip" "brightsign@$${BS_PLAYER}:/storage/sd/"; \
 	else \
