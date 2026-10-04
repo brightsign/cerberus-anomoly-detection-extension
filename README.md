@@ -64,10 +64,10 @@ See [DESIGN.md](DESIGN.md) for detailed build documentation.
 
 ### Deploy to a player
 
-Set the target player in a local `.envrc` (gitignored — copy `.envrc.example`):
+Set the target player in a local `.envrc` (gitignored — copy `envrc-example`):
 
 ```sh
-cp .envrc.example .envrc     # then edit it
+cp envrc-example .envrc       # then edit it
 # .envrc:
 #   export BS_PLAYER="ls5i2"        # player hostname or IP
 #   export BS_PASSWORD="..."        # SSH password for user 'brightsign'

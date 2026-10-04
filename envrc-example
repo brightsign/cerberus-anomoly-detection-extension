@@ -1,4 +1,7 @@
-# Copy to .envrc (gitignored) and fill in your values. `make copy` reads these.
+# Example environment for `make copy` (deploy to a player).
+# Copy to .envrc (gitignored) and fill in your values:
+#   cp envrc-example .envrc
 # If you use direnv, run `direnv allow` after creating .envrc.
+
 export BS_PLAYER="player-hostname-or-ip"   # e.g. ls5i2 or 192.168.5.177
 export BS_PASSWORD="your-ssh-password"     # SSH login password for user 'brightsign'
