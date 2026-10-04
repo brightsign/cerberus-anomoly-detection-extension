@@ -121,9 +121,14 @@ func main() {
 			if *socHome == "" {
 				return errors.New("soc-home not set; cannot restart")
 			}
-			// Detached (setsid) so we survive bsext_init restart stopping us, and
-			// the HTTP response returns before the restart tears things down.
-			return exec.Command("setsid", filepath.Join(*socHome, "bsext_init"), "restart").Start()
+			// Fully detach the restart: sh backgrounds bsext_init and exits, so the
+			// restart reparents to init (pid 1). This matters because bsext_init
+			// restart's stop step kills config-server AND its child processes -- if
+			// the restart were still our child it would kill itself. We also avoid
+			// `setsid`, which is not present on the player's BusyBox (that was the
+			// original "restart failed"). The HTTP 200 is written before this runs.
+			initScript := filepath.Join(*socHome, "bsext_init")
+			return exec.Command("sh", "-c", initScript+" restart >/dev/null 2>&1 &").Start()
 		},
 	}
 	addr := ":" + strconv.Itoa(*port)
