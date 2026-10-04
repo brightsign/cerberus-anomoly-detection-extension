@@ -76,6 +76,24 @@ package: build-engine build-models  ## Stage all SoCs and produce the dev + LVM 
 
 build: package       ## Full build: fetch SDK, prep, compile models, cross-compile, package
 
+copy:                ## scp the most recent extension zip to the player (BS_PLAYER/BS_PASSWORD, e.g. in .envrc)
+	@set -e; \
+	[ -f .envrc ] && . ./.envrc || true; \
+	: "$${BS_PLAYER:?set BS_PLAYER (player ip/hostname), e.g. in .envrc}"; \
+	zip=$$(ls -t anomaly-detection-ext-*.zip 2>/dev/null | head -1); \
+	[ -n "$$zip" ] || { echo "No anomaly-detection-ext-*.zip found -- run 'make package' first." >&2; exit 1; }; \
+	echo "Copying $$zip -> brightsign@$${BS_PLAYER}:/storage/sd/"; \
+	scp_opts="-O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"; \
+	if command -v sshpass >/dev/null 2>&1 && [ -n "$${BS_PASSWORD:-}" ]; then \
+		sshpass -p "$${BS_PASSWORD}" scp $$scp_opts "$$zip" "brightsign@$${BS_PLAYER}:/storage/sd/"; \
+	else \
+		echo "(sshpass unavailable or BS_PASSWORD unset -- you'll be prompted for the password)"; \
+		scp $$scp_opts "$$zip" "brightsign@$${BS_PLAYER}:/storage/sd/"; \
+	fi; \
+	echo ""; \
+	echo "Copied. To install, SSH to the player, descend to the root shell, then:"; \
+	echo "  cd /usr/local && unzip -o /storage/sd/$$zip && bash ./ext_npu_anomaly_install-lvm.sh && exit"
+
 run-tests:           ## Run host unit tests (no cross SDK needed)
 	bash test/cache_sh_test.sh
 	bash test/fetch_sdk_test.sh
@@ -92,4 +110,4 @@ clean:               ## Remove build artifacts (build_*/ install/ staging/ zips 
 	rm -rf build_rk* build_test_* install staging *.zip
 	bash scripts/prep.sh clean 2>/dev/null || true
 
-.PHONY: help cache-info fetch-sdk prep build-models build-engine package build run-tests test clean
+.PHONY: help cache-info fetch-sdk prep build-models build-engine package build copy run-tests test clean

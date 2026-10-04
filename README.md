@@ -62,6 +62,42 @@ frames from your video content (`python3 tools/create_calibration_dataset.py
 
 See [DESIGN.md](DESIGN.md) for detailed build documentation.
 
+### Deploy to a player
+
+Set the target player in a local `.envrc` (gitignored — copy `.envrc.example`):
+
+```sh
+cp .envrc.example .envrc     # then edit it
+# .envrc:
+#   export BS_PLAYER="ls5i2"        # player hostname or IP
+#   export BS_PASSWORD="..."        # SSH password for user 'brightsign'
+```
+
+Then copy the most recent extension zip to the player's SD card:
+
+```sh
+make copy
+```
+
+`make copy` sources `.envrc`, picks the newest `anomaly-detection-ext-*.zip`, and
+`scp`s it to `brightsign@$BS_PLAYER:/storage/sd/`. If `sshpass` is installed it
+uses `$BS_PASSWORD`; otherwise it prompts. (It uses `scp -O` because the player's
+dropbear SSH needs the legacy SCP protocol.)
+
+Installing is still a manual step on the player (it needs the root shell). `make
+copy` prints the exact commands; in the player's root shell:
+
+```sh
+cd /usr/local && unzip -o /storage/sd/anomaly-detection-ext-<ts>.zip
+bash ./ext_npu_anomaly_install-lvm.sh     # stops the running instance, rewrites the LVM volume
+exit                                       # reboots -> activates
+```
+
+Runtime config (camera device, ROI zones) lives on the SD card at
+`/storage/sd/configs/config.json` and does **not** require a rebuild/reinstall —
+edit it with the on-player zone picker (`tools/zone-picker.sh --player $BS_PLAYER`)
+or by hand, then `bsext_init restart`.
+
 ## Start RTSP Stream
 
 This section describes how to create a synthetic 5-TV health mosaic RTSP stream
