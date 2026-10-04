@@ -92,10 +92,11 @@ copy:                ## scp the newest ext zip + install-on-player.sh to the pla
 	: "No 'scp -p' either: the player's SFTP server rejects setting remote file"; \
 	: "attributes ('remote fsetstat: Permission denied' on /storage/sd)."; \
 	sshpass -p "$${BS_PASSWORD}" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-		"$$zip" install-on-player.sh "brightsign@$${BS_PLAYER}:/storage/sd/"; \
-	echo ""; \
-	echo "Copied. Install from the player's ROOT shell (Ctrl-C,Enter -> exit -> exit):"; \
-	echo "  sh /storage/sd/install-on-player.sh"
+		"$$zip" install-on-player.sh "brightsign@$${BS_PLAYER}:/storage/sd/" \
+		&& { echo ""; \
+		     echo "Copied. Install from the player's ROOT shell (Ctrl-C,Enter -> exit -> exit):"; \
+		     echo "  sh /storage/sd/install-on-player.sh"; } \
+		|| { echo "ERROR: scp to the player failed" >&2; exit 1; }
 
 run-tests:           ## Run host unit tests (no cross SDK needed)
 	bash test/cache_sh_test.sh
