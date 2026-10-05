@@ -26,8 +26,17 @@
   .muted { color: #9aa4b2; }
   .pill { background: #0f1216; border: 1px solid #333b47; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
   .tune { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; font-size: 13px; }
-  .tune label { color: #c9d1dc; }
+  .tune .lbl { display: flex; align-items: center; color: #c9d1dc; }
   .tune input { width: 90px; background: #0f1216; color: #e6e9ee; border: 1px solid #333b47; border-radius: 5px; padding: 4px 6px; text-align: right; }
+  .info { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px;
+          margin-left: 6px; border-radius: 50%; border: 1px solid #3a4452; color: #9aa4b2;
+          font-size: 11px; font-style: italic; font-family: Georgia, serif; cursor: help; position: relative; }
+  .info:hover { color: #e6e9ee; border-color: #2d6cdf; }
+  .info:hover::after {
+    content: attr(data-tip); position: absolute; left: 22px; top: -6px; width: 240px;
+    background: #0f1216; border: 1px solid #3a4452; border-radius: 6px; padding: 8px 10px;
+    font-size: 12px; font-style: normal; color: #e6e9ee; line-height: 1.4; z-index: 20;
+    white-space: normal; box-shadow: 0 6px 18px rgba(0,0,0,0.55); }
 </style>
 </head>
 <body>
@@ -139,20 +148,32 @@
   // Each field edits one health key; def = the engine default shown when the
   // loaded config does not set it.
   var HEALTH_FIELDS = [
-    { k: 'persist_off_ms',          label: 'OFF enter debounce (ms)',  step: 100,  def: 3000 },
-    { k: 'persist_off_recover_ms',  label: 'ON recover debounce (ms)', step: 100,  def: 5000 },
-    { k: 'off_dark_ratio_exit',     label: 'dark-ratio exit',          step: 0.01, def: 0.30 },
-    { k: 'off_sat_mean_exit',       label: 'saturation exit',          step: 1,    def: 35 },
-    { k: 'off_laplacian_var_exit',  label: 'detail (laplacian) exit',  step: 10,   def: 500 },
-    { k: 'off_temporal_diff_exit',  label: 'motion (temporal) exit',   step: 0.1,  def: 4.0 }
+    { k: 'persist_off_ms',          label: 'OFF enter debounce (ms)',  step: 100,  def: 3000,
+      help: 'How long the panel must look OFF before it is reported TV_OFF. Higher = fewer false OFFs but slower to flag a real one.' },
+    { k: 'persist_off_recover_ms',  label: 'ON recover debounce (ms)', step: 100,  def: 5000,
+      help: 'The main screen-on delay: how long the panel must look ON (passing any exit threshold below) before it is reported recovered. The timer restarts on any single frame that still looks off, so dark/static content recovers slower. Lower = reacts faster.' },
+    { k: 'off_dark_ratio_exit',     label: 'dark-ratio exit',          step: 0.01, def: 0.30,
+      help: 'Counts as ON when the fraction of dark pixels falls below this. Higher = a dimmer screen still counts as on (recovers sooner).' },
+    { k: 'off_sat_mean_exit',       label: 'saturation exit',          step: 1,    def: 35,
+      help: 'Counts as ON when average color saturation rises above this. Lower = less color needed to count as on.' },
+    { k: 'off_laplacian_var_exit',  label: 'detail (laplacian) exit',  step: 10,   def: 500,
+      help: 'Counts as ON when image detail/sharpness rises above this. Lower = flatter content still counts as on.' },
+    { k: 'off_temporal_diff_exit',  label: 'motion (temporal) exit',   step: 0.1,  def: 4.0,
+      help: 'Counts as ON when frame-to-frame motion rises above this. Lower = less motion needed to count as on. (Any one exit threshold passing = ON.)' }
   ];
   (function buildHealthInputs() {
     var box = document.getElementById('health');
     HEALTH_FIELDS.forEach(function (f) {
-      var lab = document.createElement('label'); lab.textContent = f.label; lab.htmlFor = 'h_' + f.k;
+      var cell = document.createElement('div'); cell.className = 'lbl';
+      var txt = document.createElement('span'); txt.textContent = f.label; cell.appendChild(txt);
+      if (f.help) {
+        var ic = document.createElement('span'); ic.className = 'info'; ic.textContent = 'i';
+        ic.setAttribute('data-tip', f.help); ic.setAttribute('title', f.help);  // title = fallback tooltip
+        cell.appendChild(ic);
+      }
       var inp = document.createElement('input');
       inp.type = 'number'; inp.id = 'h_' + f.k; inp.step = f.step; inp.value = f.def;
-      box.appendChild(lab); box.appendChild(inp);
+      box.appendChild(cell); box.appendChild(inp);
     });
   })();
   function populateHealth(cfg) {
