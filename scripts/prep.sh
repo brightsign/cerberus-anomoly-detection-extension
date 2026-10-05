@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fetches the Rockchip-origin RKNN API header and runtime library the app needs,
+# from the pinned upstream repo, into include/. These are NOT vendored here: the
+# RKNN API header + librknnrt.so are Rockchip proprietary (their headers forbid
+# redistribution), so they are fetched from Rockchip at build time rather than
+# committed. Pinned to the same RKNN version used to compile the models
+# (scripts/build-models.sh) and installed into the SDK sysroot (fetch-sdk.sh) so
+# the header, runtime, and compiled models stay compatible.
+#
+# The app includes only <rknn_api.h> (which itself pulls only <stdint.h>), so
+# that header plus the runtime are all that is required; RGA/DRM headers come
+# from the SDK sysroot, not here.
+#
+# Usage: prep.sh            fetch the files (uses RKNN_TAG, default v2.3.0)
+#        prep.sh clean      remove the fetched files
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INCLUDE_DIR="${REPO_ROOT}/include"
+RKNN_TAG="${RKNN_TAG:-v2.3.0}"
+
+TK="https://raw.githubusercontent.com/airockchip/rknn-toolkit2/${RKNN_TAG}"
+
+# Each entry: "<destination-filename>|<url>"
+FILES=(
+    "rknn_api.h|${TK}/rknpu2/runtime/Linux/librknn_api/include/rknn_api.h"
+    "librknnrt.so|${TK}/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so"
+)
+
+if [ "${1:-}" = "clean" ]; then
+    echo "==> Removing fetched Rockchip RKNN sources from include/"
+    for entry in "${FILES[@]}"; do
+        name="${entry%%|*}"
+        dest="${INCLUDE_DIR}/${name}"
+        if [ -e "${dest}" ]; then
+            rm -f "${dest}"
+            echo "    removed ${name}"
+        fi
+    done
+    exit 0
+fi
+
+fetch() {
+    local url="$1" dest="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "${dest}" "${url}"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "${dest}" "${url}"
+    else
+        echo "ERROR: need curl or wget to fetch RKNN sources" >&2
+        exit 1
+    fi
+}
+
+mkdir -p "${INCLUDE_DIR}"
+echo "==> Fetching Rockchip RKNN sources (${RKNN_TAG}) into include/"
+for entry in "${FILES[@]}"; do
+    name="${entry%%|*}"
+    url="${entry#*|}"
+    dest="${INCLUDE_DIR}/${name}"
+    if [ -s "${dest}" ]; then
+        echo "    ${name} (present)"
+        continue
+    fi
+    echo "    ${name}"
+    tmp="${dest}.tmp.$$"
+    fetch "${url}" "${tmp}"
+    if [ ! -s "${tmp}" ]; then
+        rm -f "${tmp}"
+        echo "ERROR: fetched empty file for ${name} from ${url}" >&2
+        exit 1
+    fi
+    mv "${tmp}" "${dest}"
+done
+
+echo "==> RKNN sources ready in ${INCLUDE_DIR}"

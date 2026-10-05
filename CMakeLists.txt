@@ -73,18 +73,21 @@ if(NOT DEFINED LIB_ARCH)
   set(LIB_ARCH aarch64)
 endif()
 
-string(TOLOWER ${CMAKE_SYSTEM_NAME} cmake_system_name_lower)
-string(TOLOWER ${LIB_ARCH} lib_arch_lower)
-set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/${TARGET_SOC}_${cmake_system_name_lower}_${lib_arch_lower})
+# Install to install/<UPPER-SOC> (RK3588/RK3576/RK3568): one prefix, defined
+# once and used both for RPATH below and by every install() rule. Previously the
+# prefix was set here to <soc>_linux_aarch64 and then re-set later to <SOC>, so
+# the RPATH pointed at a directory the libraries were never installed to.
+string(TOUPPER ${TARGET_SOC} SOC_DIR)
+set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/${SOC_DIR})
 
 set(CMAKE_SKIP_INSTALL_RPATH FALSE)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
 
-# rknn api
+# rknn api -- header + runtime are fetched into include/ by scripts/prep.sh
+# (Rockchip proprietary; not vendored). See the shared-SDK-cache migration.
 set(LIB_ARCH aarch64)
-set(RKNN_API_PATH ${CMAKE_SOURCE_DIR}/toolkit/rknn-toolkit2/rknpu2/runtime/Linux/librknn_api)
-set(RKNN_RT_LIB ${RKNN_API_PATH}/aarch64/librknnrt.so)
+set(RKNN_RT_LIB ${CMAKE_SOURCE_DIR}/include/librknnrt.so)
 
 #rga -- the 3588 rga lib is okay 3576
 # set(RGA_PATH ${CMAKE_SOURCE_DIR}/include/3rdparty/rga/RK3588)
@@ -96,7 +99,8 @@ set(RGA_LIB ${OECORE_TARGET_SYSROOT}/usr/lib/librga.so)
 # set(TURBOJPEG_LIB ${TURBOJPEG_PATH}/libturbojpeg.a)
 
 
-include_directories(${RKNN_API_PATH}/include)
+# rknn_api.h is fetched into include/ by prep.sh and picked up via the
+# ${CMAKE_SOURCE_DIR}/include directory added below.
 include_directories(${CMAKE_SOURCE_DIR}/include/3rdparty)
 include_directories(${RGA_PATH}/include)
 
@@ -176,6 +180,7 @@ set(ANOMALY_SOURCES
   src/main.cpp
   src/wvm/config.cpp
   src/wvm/logger.cpp
+  src/wvm/camera_autodetect.cpp
   src/wvm/v4l2_capture.cpp
   src/wvm/gst_rtsp_capture.cpp
   src/wvm/roi.cpp
@@ -233,18 +238,19 @@ else()
   message(STATUS "anomaly_detection: MQTT publishing DISABLED (stub only)")
 endif()
 
-# Install executable
-install(TARGETS anomaly_detection DESTINATION bin)
+# The executable is installed once, to the extension root (DESTINATION ./), near
+# the end of this file -- bsext_init launches ${SOC_HOME}/anomaly_detection.
 
-# Install config files to config/ directory, substituting @TARGET_SOC@ so
-# rknn_path points to the correct model for each platform (rk3588/rk3568/rk3576).
-foreach(_cfg videowall.json health_5tv.json videowall_rtsp.json config.json)
-  configure_file(config/${_cfg} ${CMAKE_CURRENT_BINARY_DIR}/config/${_cfg} @ONLY)
-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/config/${_cfg} DESTINATION config)
-endforeach()
+# Install the single canonical config, substituting @TARGET_SOC@ so rknn_path
+# points to the correct model for each platform (rk3588/rk3568/rk3576). This is
+# the only config shipped on the player; bsext_init seeds it to the SD card
+# (/storage/sd/configs/config.json) on first boot, where it is edited in the
+# field. Other config/*.json are repo-only examples (see config/examples/).
+configure_file(config/config.json ${CMAKE_CURRENT_BINARY_DIR}/config/config.json @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/config/config.json DESTINATION config)
 
-# Convert TARGET_SOC to uppercase for SOC_DIR
-string(TOUPPER ${TARGET_SOC} SOC_DIR)
+# SOC_DIR (uppercase TARGET_SOC) and CMAKE_INSTALL_PREFIX are defined once near
+# the top of this file.
 
 # Build mosquitto broker (aarch64) from source for embedded deployment
 set(MOSQUITTO_VERSION "2.0.18")
@@ -255,10 +261,10 @@ set(MOSQUITTO_BINARY ${MOSQUITTO_SOURCE_DIR}/bin/mosquitto)
 if(DEFINED ENV{MOSQUITTO_SOURCE_TARBALL})
     set(MOSQUITTO_SOURCE_TARBALL "$ENV{MOSQUITTO_SOURCE_TARBALL}")
 else()
-    # Try to find mosquitto tarball in common locations
+    # Try to find a pre-downloaded mosquitto tarball; otherwise it is fetched
+    # from the network below. (The brightsign-oe download tree is no longer
+    # vendored -- the SDK now comes from the shared cache.)
     set(MOSQUITTO_SEARCH_PATHS
-        "${CMAKE_SOURCE_DIR}/brightsign-oe/build/downloads/mosquitto-${MOSQUITTO_VERSION}.tar.gz"
-        "${CMAKE_SOURCE_DIR}/../brightsign-oe/build/downloads/mosquitto-${MOSQUITTO_VERSION}.tar.gz"
         "${CMAKE_SOURCE_DIR}/downloads/mosquitto-${MOSQUITTO_VERSION}.tar.gz"
         "${CMAKE_BINARY_DIR}/mosquitto-${MOSQUITTO_VERSION}.tar.gz"
     )
@@ -337,31 +343,16 @@ add_custom_target(image_stream_server ALL
   VERBATIM
 )
 
-# Copy embedding models from toolkit to install directory
-# Only copy if the model file exists for this SOC
-set(MODEL_SOURCE ${CMAKE_SOURCE_DIR}/toolkit/mobilenetv2-embedding-${TARGET_SOC}.rknn)
-set(MODEL_DEST ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model/mobilenetv2-embedding-${TARGET_SOC}.rknn)
+# Models are compiled into the shared cache by scripts/build-models.sh and staged
+# into the extension by the package pipeline; CMake no longer copies them. (The
+# old copy_models target read toolkit/mobilenetv2-embedding-*.rknn, a path nothing
+# ever wrote.)
 
-if(EXISTS ${MODEL_SOURCE})
-  add_custom_target(copy_models ALL
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MODEL_SOURCE} ${MODEL_DEST}
-    COMMENT "Copying MobileNetV2 embedding model for ${TARGET_SOC}"
-    VERBATIM
-  )
-else()
-  message(WARNING "Model file not found: ${MODEL_SOURCE} - skipping model copy for ${TARGET_SOC}")
-  add_custom_target(copy_models ALL
-    COMMAND ${CMAKE_COMMAND} -E echo "Model file not available for ${TARGET_SOC}, skipping..."
-    COMMENT "Model file not available for ${TARGET_SOC}"
-  )
-endif()
-
-# Copy shared libs and models. Copy the Go binary only if it exists.
+# Copy shared libs to the build dir so the binary can run from build_<soc>/.
+# Copy the Go binary only if it exists.
 add_custom_command(TARGET anomaly_detection POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy ${RKNN_RT_LIB} $<TARGET_FILE_DIR:anomaly_detection>
   COMMAND ${CMAKE_COMMAND} -E copy ${RGA_LIB} $<TARGET_FILE_DIR:anomaly_detection>
-  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model $<TARGET_FILE_DIR:anomaly_detection>/model
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/image-stream-server $<TARGET_FILE_DIR:anomaly_detection>/image-stream-server || ${CMAKE_COMMAND} -E true
   COMMENT "Copying libraries and binaries to build directory"
 )
@@ -370,11 +361,21 @@ add_custom_command(TARGET anomaly_detection POST_BUILD
 if(TARGET mosquitto_broker)
   add_dependencies(anomaly_detection mosquitto_broker)
 endif()
-add_dependencies(anomaly_detection image_stream_server)
-add_dependencies(anomaly_detection copy_models)
+# config-server: in-repo Go HTTP server for on-player ROI editing. SoC-independent
+# (pure Go/arm64), built once into the per-SoC build dir and bundled like the
+# image-stream-server. The zone-picker HTML/JS is embedded in the binary.
+set(CONFIG_SERVER_BINARY ${CMAKE_BINARY_DIR}/config-server)
+add_custom_target(config_server ALL
+  COMMAND ${CMAKE_COMMAND} -E echo "Building config-server (Go, arm64)..."
+  COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/build_config_server.sh ${CMAKE_SOURCE_DIR}/srv/config-server ${CONFIG_SERVER_BINARY}
+  COMMENT "Building config-server"
+  VERBATIM
+)
 
-# install target and libraries
-set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/${SOC_DIR})
+add_dependencies(anomaly_detection image_stream_server)
+add_dependencies(anomaly_detection config_server)
+
+# install target and libraries (CMAKE_INSTALL_PREFIX = install/${SOC_DIR}, set once above)
 install(TARGETS anomaly_detection DESTINATION ./)
 
 # Install capture helper script so it ends up in the extension squashfs
@@ -386,6 +387,14 @@ install(FILES ${CMAKE_SOURCE_DIR}/capture_tv_off_prototype.sh
 
 # Install the image stream server binary from the copied location
 install(FILES ${CMAKE_BINARY_DIR}/image-stream-server
+        DESTINATION ./
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                   GROUP_READ GROUP_EXECUTE
+                   WORLD_READ WORLD_EXECUTE
+        OPTIONAL)
+
+# Install the config-server binary (on-player ROI editor).
+install(FILES ${CONFIG_SERVER_BINARY}
         DESTINATION ./
         PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
                    GROUP_READ GROUP_EXECUTE

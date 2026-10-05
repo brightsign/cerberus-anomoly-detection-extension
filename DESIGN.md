@@ -502,7 +502,7 @@ See [MOBILENETV2_APPROACH.md](MOBILENETV2_APPROACH.md) for complete model pipeli
 
 - **XT5** (RK3588) - High-performance NPU (Recommended)
 - **LS5** (RK3568) - Mid-range NPU
-- **Firebird** (RK3576) - Latest generation NPU
+- **XS6/XD6** (RK3576) - Latest generation NPU
 
 ### Hardware Acceleration
 

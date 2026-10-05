@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cerberus Zone Picker</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #15181d; color: #e6e9ee; }
+  header { padding: 10px 16px; background: #1d222a; border-bottom: 1px solid #2b313b; }
+  header h1 { margin: 0; font-size: 16px; }
+  header .hint { color: #9aa4b2; font-size: 12px; }
+  main { display: flex; gap: 16px; padding: 16px; align-items: flex-start; flex-wrap: wrap; }
+  #stage { position: relative; line-height: 0; max-width: 100%; }
+  #img { display: block; max-width: 100%; height: auto; background: #000; }
+  #overlay { position: absolute; left: 0; top: 0; cursor: crosshair; }
+  .panel { flex: 1 1 300px; min-width: 260px; max-width: 460px; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+  button { background: #2a3340; color: #e6e9ee; border: 1px solid #3a4452; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
+  button:hover { background: #343f4e; }
+  button.primary { background: #2d6cdf; border-color: #2d6cdf; }
+  button.warn { background: #b4472d; border-color: #b4472d; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #262c35; }
+  th { color: #9aa4b2; }
+  .muted { color: #9aa4b2; }
+  .pill { background: #0f1216; border: 1px solid #333b47; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+  .tune { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; font-size: 13px; }
+  .tune .lbl { display: flex; align-items: center; color: #c9d1dc; }
+  .tune input { width: 90px; background: #0f1216; color: #e6e9ee; border: 1px solid #333b47; border-radius: 5px; padding: 4px 6px; text-align: right; }
+  .info { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px;
+          margin-left: 6px; border-radius: 50%; border: 1px solid #3a4452; color: #9aa4b2;
+          font-size: 11px; font-style: italic; font-family: Georgia, serif; cursor: help; position: relative; }
+  .info:hover { color: #e6e9ee; border-color: #2d6cdf; }
+  .info:hover::after {
+    content: attr(data-tip); position: absolute; left: 22px; top: -6px; width: 240px;
+    background: #0f1216; border: 1px solid #3a4452; border-radius: 6px; padding: 8px 10px;
+    font-size: 12px; font-style: normal; color: #e6e9ee; line-height: 1.4; z-index: 20;
+    white-space: normal; box-shadow: 0 6px 18px rgba(0,0,0,0.55); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cerberus Zone Picker</h1>
+  <div class="hint">Drag a box over each screen. Save writes the config; Restart applies it.</div>
+</header>
+
+<main>
+  <div id="stage">
+    <img id="img" alt="camera">
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <span class="pill">frame <span id="dim">-</span></span>
+      <span class="pill">zones <span id="count">0</span></span>
+      <button id="clear">Clear all</button>
+    </div>
+
+    <table><thead><tr><th>id</th><th>x</th><th>y</th><th>w</th><th>h</th><th></th></tr></thead>
+    <tbody id="rows"></tbody></table>
+
+    <details id="camwrap" open style="margin-top:12px">
+      <summary style="cursor:pointer;color:#e6e9ee;font-weight:600">Camera exposure</summary>
+      <div class="hint" style="margin:6px 0">Turn OFF auto-exposure and pin exposure/gain so the image stays constant when a screen turns on/off (prevents still-off screens from reading ON). Needs Save &amp; Restart.</div>
+      <div id="camera" class="tune"></div>
+    </details>
+
+    <details id="tunewrap" open style="margin-top:12px">
+      <summary style="cursor:pointer;color:#e6e9ee;font-weight:600">TV-off detection tuning</summary>
+      <div class="hint" style="margin:6px 0">Lower the recover debounce / loosen the exit thresholds to detect screen-on faster (too loose = flicker between OFF/ON).</div>
+      <div id="health" class="tune"></div>
+    </details>
+
+    <div class="row" style="margin-top:12px">
+      <button id="save" class="primary">Save</button>
+      <button id="restart" class="warn">Restart</button>
+      <span id="state" class="muted"></span>
+    </div>
+  </div>
+</main>
+
+<script src="zone-picker.logic.js"></script>
+<script>
+(function () {
+  'use strict';
+  var ZP = window.ZonePicker;
+  var img = document.getElementById('img');
+  var overlay = document.getElementById('overlay');
+  var ctx = overlay.getContext('2d');
+  var stateEl = document.getElementById('state');
+
+  var boxes = [];        // frame (natural) pixels
+  var config = null;     // the live config.json
+  var drag = null;
+
+  function nW() { return img.naturalWidth || 0; }
+  function nH() { return img.naturalHeight || 0; }
+
+  function fit() {
+    overlay.width = img.clientWidth; overlay.height = img.clientHeight;
+    overlay.style.width = img.clientWidth + 'px'; overlay.style.height = img.clientHeight + 'px';
+    redraw();
+  }
+  function toDisplay(b) {
+    var sx = img.clientWidth / (nW() || 1), sy = img.clientHeight / (nH() || 1);
+    return { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy };
+  }
+  function redraw() {
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    var tvs = ZP.buildRoiConfig(boxes).tvs;
+    ctx.lineWidth = 2; ctx.font = '13px system-ui';
+    tvs.forEach(function (t) {
+      var d = toDisplay(t);
+      ctx.strokeStyle = '#ffd166';
+      ctx.strokeRect(d.x, d.y, d.w, d.h);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(d.x, d.y, 34, 16);
+      ctx.fillStyle = '#ffd166'; ctx.fillText(t.id, d.x + 3, d.y + 12);
+    });
+    if (drag) { ctx.strokeStyle = '#38d39f'; ctx.strokeRect(drag.x0, drag.y0, drag.x1 - drag.x0, drag.y1 - drag.y0); }
+    document.getElementById('count').textContent = tvs.length;
+    document.getElementById('dim').textContent = nW() ? (nW() + 'x' + nH()) : '-';
+    var tb = document.getElementById('rows'); tb.innerHTML = '';
+    tvs.forEach(function (t, i) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + t.id + '</td><td>' + t.x + '</td><td>' + t.y + '</td><td>' + t.w + '</td><td>' + t.h + '</td>';
+      var td = document.createElement('td'), b = document.createElement('button');
+      b.textContent = 'x'; b.onclick = function () { boxes.splice(i, 1); redraw(); };
+      td.appendChild(b); tr.appendChild(td); tb.appendChild(tr);
+    });
+  }
+
+  function pos(ev) { var r = overlay.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; }
+  overlay.addEventListener('mousedown', function (e) { var p = pos(e); drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; });
+  overlay.addEventListener('mousemove', function (e) { if (!drag) return; var p = pos(e); drag.x1 = p.x; drag.y1 = p.y; redraw(); });
+  window.addEventListener('mouseup', function () {
+    if (!drag) return;
+    var dx = Math.min(drag.x0, drag.x1), dy = Math.min(drag.y0, drag.y1);
+    var dw = Math.abs(drag.x1 - drag.x0), dh = Math.abs(drag.y1 - drag.y0);
+    drag = null;
+    if (dw < 6 || dh < 6) { redraw(); return; }
+    var sx = (nW() || 1) / img.clientWidth, sy = (nH() || 1) / img.clientHeight;
+    var c = ZP.clampToFrame(ZP.scaleBox({ x: dx, y: dy, w: dw, h: dh }, sx, sy), nW(), nH());
+    boxes.push({ x: c.x, y: c.y, w: c.w, h: c.h });
+    redraw();
+  });
+  document.getElementById('clear').onclick = function () { boxes = []; redraw(); };
+
+  img.addEventListener('load', fit);
+  window.addEventListener('resize', fit);
+
+  // --- TV-off detection tuning (config.health) ---
+  // Each field edits one health key; def = the engine default shown when the
+  // loaded config does not set it.
+  var HEALTH_FIELDS = [
+    { k: 'persist_off_ms',          label: 'OFF enter debounce (ms)',  step: 100,  def: 3000,
+      help: 'How long the panel must look OFF before it is reported TV_OFF. Higher = fewer false OFFs but slower to flag a real one.' },
+    { k: 'persist_off_recover_ms',  label: 'ON recover debounce (ms)', step: 100,  def: 5000,
+      help: 'The main screen-on delay: how long the panel must look ON (passing any exit threshold below) before it is reported recovered. The timer restarts on any single frame that still looks off, so dark/static content recovers slower. Lower = reacts faster.' },
+    { k: 'off_dark_ratio_exit',     label: 'dark-ratio exit',          step: 0.01, def: 0.30,
+      help: 'Counts as ON when the fraction of dark pixels falls below this. Higher = a dimmer screen still counts as on (recovers sooner).' },
+    { k: 'off_sat_mean_exit',       label: 'saturation exit',          step: 1,    def: 35,
+      help: 'Counts as ON when average color saturation rises above this. Lower = less color needed to count as on.' },
+    { k: 'off_laplacian_var_exit',  label: 'detail (laplacian) exit',  step: 10,   def: 500,
+      help: 'Counts as ON when image detail/sharpness rises above this. Lower = flatter content still counts as on.' },
+    { k: 'off_temporal_diff_exit',  label: 'motion (temporal) exit',   step: 0.1,  def: 4.0,
+      help: 'Counts as ON when frame-to-frame motion rises above this. Lower = less motion needed to count as on. (Any one exit threshold passing = ON.)' }
+  ];
+  var CAMERA_FIELDS = [
+    { k: 'auto_exposure', label: 'auto exposure', type: 'bool', def: true,
+      help: 'Camera auto-exposure chases scene brightness. Turn this OFF so the image stays constant when a screen turns on/off -- otherwise a still-off screen can read as ON.' },
+    { k: 'exposure_absolute', label: 'exposure', step: 10, def: 250,
+      help: 'Fixed exposure time (lower = darker image). Only used when auto exposure is OFF. Dial down until off screens are solidly dark.' },
+    { k: 'gain', label: 'gain', step: 1, def: 0,
+      help: 'Fixed sensor gain (lower = darker, less noise). Only used when auto exposure is OFF.' },
+    { k: 'auto_white_balance', label: 'auto white balance', type: 'bool', def: true,
+      help: 'Turn OFF to pin the color temperature so it does not shift with scene changes.' },
+    { k: 'white_balance_temperature', label: 'white balance (K)', step: 100, def: 4000,
+      help: 'Fixed color temperature in Kelvin. Only used when auto white balance is OFF.' }
+  ];
+
+  // Generic field builder: prefix avoids id collisions; type 'bool' -> checkbox.
+  function buildFields(prefix, containerId, fields) {
+    var box = document.getElementById(containerId);
+    fields.forEach(function (f) {
+      var cell = document.createElement('div'); cell.className = 'lbl';
+      var txt = document.createElement('span'); txt.textContent = f.label; cell.appendChild(txt);
+      if (f.help) {
+        var ic = document.createElement('span'); ic.className = 'info'; ic.textContent = 'i';
+        ic.setAttribute('data-tip', f.help); ic.setAttribute('title', f.help);
+        cell.appendChild(ic);
+      }
+      var inp = document.createElement('input');
+      inp.id = prefix + f.k;
+      if (f.type === 'bool') { inp.type = 'checkbox'; inp.checked = !!f.def; inp.style.width = 'auto'; }
+      else { inp.type = 'number'; inp.step = f.step; inp.value = f.def; }
+      box.appendChild(cell); box.appendChild(inp);
+    });
+  }
+  function populateFields(prefix, fields, obj) {
+    obj = obj || {};
+    fields.forEach(function (f) {
+      var has = obj[f.k] !== undefined && obj[f.k] !== null;
+      var inp = document.getElementById(prefix + f.k);
+      if (f.type === 'bool') inp.checked = has ? !!obj[f.k] : !!f.def;
+      else inp.value = has ? obj[f.k] : f.def;
+    });
+  }
+  function readFields(prefix, fields) {
+    var o = {};
+    fields.forEach(function (f) {
+      var inp = document.getElementById(prefix + f.k);
+      if (f.type === 'bool') o[f.k] = inp.checked;
+      else { var n = parseFloat(inp.value); if (!isNaN(n)) o[f.k] = n; }
+    });
+    return o;
+  }
+
+  buildFields('h_', 'health', HEALTH_FIELDS);
+  buildFields('c_', 'camera', CAMERA_FIELDS);
+  function populateHealth(cfg) { populateFields('h_', HEALTH_FIELDS, cfg && cfg.health); }
+  function populateCamera(cfg) { populateFields('c_', CAMERA_FIELDS, cfg && cfg.device); }
+
+  // Build the config to save: current zones + current health/camera edits, every
+  // other key of the loaded config preserved.
+  function currentConfig() {
+    var cfg = ZP.mergeRoi(config, boxes);
+    cfg.health = Object.assign({ enabled: true }, cfg.health || {}, readFields('h_', HEALTH_FIELDS));
+    cfg.device = Object.assign({}, cfg.device || {}, readFields('c_', CAMERA_FIELDS));
+    return cfg;
+  }
+
+  document.getElementById('save').onclick = function () { save(false); };
+  document.getElementById('restart').onclick = function () { save(true); };
+
+  function save(thenRestart) {
+    if (!config) { stateEl.textContent = 'no config loaded'; return; }
+    stateEl.textContent = 'saving...';
+    var cfg = currentConfig();
+    fetch('/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify(cfg, null, 2) })
+      .then(function (r) {
+        if (!r.ok) throw new Error('save failed (' + r.status + ')');
+        config = cfg;
+        if (!thenRestart) { stateEl.textContent = 'saved'; return; }
+        // Restarting the extension kills THIS server (it is part of the extension),
+        // so the /restart response may never arrive -- fire it and don't depend on
+        // the reply, then poll until the server comes back and reload.
+        fetch('/restart', { method: 'POST' }).catch(function () {});
+        setTimeout(waitForRestart, 1500);
+      })
+      .catch(function (e) { stateEl.textContent = String(e.message || e); });
+  }
+
+  function waitForRestart() {
+    var tries = 0;
+    stateEl.textContent = 'restarting service, reconnecting...';
+    var iv = setInterval(function () {
+      tries++;
+      fetch('/config', { cache: 'no-store' })
+        .then(function (r) {
+          if (r && r.ok) {
+            clearInterval(iv);
+            stateEl.textContent = 'restarted';
+            setTimeout(function () { location.reload(); }, 600);
+          }
+        })
+        .catch(function () { /* server still down; keep polling */ });
+      if (tries > 45) {   // ~90s
+        clearInterval(iv);
+        stateEl.textContent = 'restarted (if the view is stale, reload the page)';
+      }
+    }, 2000);
+  }
+
+  // Load the live config + camera from the player this page is served by.
+  var host = location.hostname || 'localhost';
+  function refreshImage() { img.src = 'http://' + host + ':20200/image?_t=' + Date.now(); }
+  refreshImage(); setInterval(refreshImage, 1000);
+
+  fetch('/config').then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (cfg) {
+      if (!cfg) { stateEl.textContent = 'could not load config'; return; }
+      config = cfg; boxes = ZP.configToBoxes(cfg); populateHealth(cfg); populateCamera(cfg); redraw();
+      stateEl.textContent = boxes.length + ' zone(s) loaded';
+    })
+    .catch(function () { stateEl.textContent = 'could not load config'; });
+})();
+</script>
+</body>
+</html>

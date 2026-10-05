@@ -52,13 +52,22 @@ bsfw_write_extension_lvm() {
     fi
 
     (
-        # This shouldn't be necessary when this install script is
-        # incorporated into a standard BrightSign upgrade script but
-        # can be useful during development.
+        # Stop the running instance so nothing holds the mount / files open when we
+        # unmount and lvremove below. Kill by binary name with killall: the player
+        # is BusyBox and has NO pkill/pgrep (the extension's own bsext_init stop
+        # relies on pkill, so we do not call it here -- we kill directly).
+        echo "echo \"Stopping ${name} processes (killall; no pkill on the player)\""
+        echo "for _p in anomaly_detection config-server image-stream-server mosquitto; do"
+        echo "    killall -9 \"\$_p\" 2>/dev/null || true"
+        echo "done"
+        echo "sleep 2"
+
+        # Unmount the squashfs. Fall back to a lazy unmount (umount -l) if a lingering
+        # process still holds it busy, so the install cannot wedge on 'Device busy'.
         echo "echo \"Trying to unmount ${name} volume\""
         echo "if [ -d '/var/volatile/bsext/${mount_name}' ]; then"
-        echo "    umount /var/volatile/bsext/${mount_name}"
-        echo "    rmdir /var/volatile/bsext/${mount_name}"
+        echo "    umount /var/volatile/bsext/${mount_name} 2>/dev/null || umount -l /var/volatile/bsext/${mount_name} 2>/dev/null || true"
+        echo "    rmdir /var/volatile/bsext/${mount_name} 2>/dev/null || true"
         echo "fi"
 
         # Remove dm-verity mapping such that LVM volume can be removed
@@ -99,6 +108,18 @@ bsfw_write_extension_lvm() {
         # Now we know that the volume is correct we can rename it so
         # it can be used.
         echo "lvrename bsos '${tmp_vol_name}' '${mapper_vol_name}'"
+
+        # Prune install zips from /storage/sd, keeping only the newest extension
+        # zip (the one just installed). Runs here so it happens no matter how this
+        # script was launched (directly or via install-on-player.sh). Only touches
+        # this project's zips.
+        echo "echo \"Pruning old install zips from /storage/sd (keeping the newest)...\""
+        echo "_keep=\$(ls -t /storage/sd/anomaly-detection-ext-*.zip 2>/dev/null | head -1)"
+        echo "for _z in /storage/sd/anomaly-detection-ext-*.zip /storage/sd/anomaly-detection-dev-*.zip; do"
+        echo "    [ -e \"\$_z\" ] || continue"
+        echo "    [ \"\$_z\" = \"\$_keep\" ] && continue"
+        echo "    rm -f \"\$_z\""
+        echo "done"
     )
 }
 

@@ -87,6 +87,7 @@ bool V4L2Capture::start() {
   
   Logger::instance().log(LogLevel::INFO, "V4L2 device opened successfully (fd=%d)", fd_);
   if (!init_device()) return false;
+  apply_camera_controls();
   if (!init_mmap()) return false;
 
   // Queue buffers
@@ -252,6 +253,38 @@ bool V4L2Capture::read_frame(CapturedFrame& out) {
   return true;
 }
 
+// Best-effort set of a single V4L2 control; a camera that lacks the control just
+// logs a warning and is otherwise unaffected.
+static void set_v4l2_ctrl(int fd, uint32_t id, int value, const char* name) {
+  v4l2_control c{};
+  c.id = id;
+  c.value = value;
+  if (ioctl(fd, VIDIOC_S_CTRL, &c) < 0) {
+    Logger::instance().log(LogLevel::WARN, "V4L2: could not set %s=%d (errno=%d: %s)",
+                           name, value, errno, strerror(errno));
+  } else {
+    Logger::instance().log(LogLevel::INFO, "V4L2: set %s=%d", name, value);
+  }
+}
+
+// Pin exposure/gain/white-balance when manual is requested. Auto-exposure chases
+// scene brightness, which flips still-off screens to ON when a bright one turns
+// off; a fixed exposure keeps per-ROI luma stable. Controls are set before
+// streaming; EXPOSURE_AUTO must go to manual before EXPOSURE_ABSOLUTE takes.
+void V4L2Capture::apply_camera_controls() {
+  if (!cfg_.auto_exposure) {
+    set_v4l2_ctrl(fd_, V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL, "exposure_auto(manual)");
+    set_v4l2_ctrl(fd_, V4L2_CID_EXPOSURE_ABSOLUTE, cfg_.exposure_absolute, "exposure_absolute");
+    set_v4l2_ctrl(fd_, V4L2_CID_GAIN, cfg_.gain, "gain");
+  } else {
+    Logger::instance().log(LogLevel::INFO, "V4L2: leaving auto-exposure enabled (device.auto_exposure=true)");
+  }
+  if (!cfg_.auto_white_balance) {
+    set_v4l2_ctrl(fd_, V4L2_CID_AUTO_WHITE_BALANCE, 0, "white_balance_auto(off)");
+    set_v4l2_ctrl(fd_, V4L2_CID_WHITE_BALANCE_TEMPERATURE, cfg_.white_balance_temperature, "white_balance_temperature");
+  }
+}
+
 bool V4L2Capture::init_device() {
   // 1) Query caps
   v4l2_capability cap{};
@@ -260,14 +293,22 @@ bool V4L2Capture::init_device() {
     return false;
   }
 
+  // Use this node's device_caps, not the device-wide capabilities union. A UVC
+  // webcam exposes a real capture node and a paired metadata node; the union
+  // reports VIDEO_CAPTURE on both, so capabilities would misidentify the metadata
+  // node as capture (then "No pixel formats enumerated"). device_caps is per-node.
+  const uint32_t caps = (cap.capabilities & V4L2_CAP_DEVICE_CAPS)
+                            ? cap.device_caps
+                            : cap.capabilities;
+
   is_mplane_ =
-      (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE) != 0;
+      (caps & V4L2_CAP_VIDEO_CAPTURE_MPLANE) != 0;
 
   const bool is_capture =
-      (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) != 0;
+      (caps & V4L2_CAP_VIDEO_CAPTURE) != 0;
 
   const bool is_streaming =
-      (cap.capabilities & V4L2_CAP_STREAMING) != 0;
+      (caps & V4L2_CAP_STREAMING) != 0;
 
   Logger::instance().log(LogLevel::INFO, "V4L2 caps: driver=%s card=%s bus=%s",
                          cap.driver, cap.card, cap.bus_info);

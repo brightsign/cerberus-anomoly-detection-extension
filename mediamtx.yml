@@ -1,0 +1,12 @@
+paths:
+  live:
+runOnInit: >
+      ffmpeg -re -stream_loop -1 -i /home/sree/bs/anomaly/rtsp/Anomaly_Wallmart.mp4
+             -an
+             -vf scale=1920:1080,format=yuv420p
+             -c:v libx264 -preset veryfast -tune zerolatency
+             -profile:v high -level 4.1
+             -b:v 2000k -maxrate 2000k -bufsize 1000k -g 50
+             -fflags nobuffer -flags low_delay -muxdelay 0.1
+             -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnInitRestart: yes

@@ -15,21 +15,23 @@ endif()
 
 message(STATUS "Building for platform: ${TARGET_PLATFORM}")
 
-# Platform-specific paths
-if(TARGET_PLATFORM STREQUAL "RK3588")
-    set(RKNN_API_PATH "${CMAKE_SOURCE_DIR}/../toolkit/rknn-toolkit2/rknpu2/runtime/Linux/librknn_api")
-elseif(TARGET_PLATFORM STREQUAL "RK3568")
-    set(RKNN_API_PATH "${CMAKE_SOURCE_DIR}/../toolkit/rknn-toolkit2/rknpu2/runtime/Linux/librknn_api")
-elseif(TARGET_PLATFORM STREQUAL "RK3576")
-    set(RKNN_API_PATH "${CMAKE_SOURCE_DIR}/../toolkit/rknn-toolkit2/rknpu2/runtime/Linux/librknn_api")
-else()
+# Platform validation (the compiled binary is identical across SoCs; the platform
+# only labels the install path).
+if(NOT (TARGET_PLATFORM STREQUAL "RK3588" OR TARGET_PLATFORM STREQUAL "RK3568" OR TARGET_PLATFORM STREQUAL "RK3576"))
     message(FATAL_ERROR "Unsupported platform: ${TARGET_PLATFORM}")
+endif()
+
+# rknn_api.h comes from the repo include/ (fetched by scripts/prep.sh); stb_image
+# comes from the RKNN model zoo in the shared cache toolkit. build_test.sh resolves
+# and passes TOOLKIT_DIR; librknnrt is linked from the SDK sysroot below.
+if(NOT DEFINED TOOLKIT_DIR)
+    message(FATAL_ERROR "TOOLKIT_DIR not set -- invoke this via ./build_test.sh, which resolves the shared cache")
 endif()
 
 # Include directories
 include_directories(
-    ${RKNN_API_PATH}/include
-    ${CMAKE_SOURCE_DIR}/../toolkit/rknn_model_zoo/3rdparty/stb_image
+    ${CMAKE_SOURCE_DIR}/../include
+    ${TOOLKIT_DIR}/rknn_model_zoo/3rdparty/stb_image
 )
 
 # Link directories

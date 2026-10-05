@@ -65,6 +65,11 @@ bool load_config(const std::string& path, AppConfig& out) {
     out.device.height = d.value("height", out.device.height);
     out.device.fps = d.value("fps", out.device.fps);
     out.device.pixel_format = parse_pixfmt(d.value("pixel_format", "YUYV"));
+    out.device.auto_exposure = d.value("auto_exposure", out.device.auto_exposure);
+    out.device.exposure_absolute = d.value("exposure_absolute", out.device.exposure_absolute);
+    out.device.gain = d.value("gain", out.device.gain);
+    out.device.auto_white_balance = d.value("auto_white_balance", out.device.auto_white_balance);
+    out.device.white_balance_temperature = d.value("white_balance_temperature", out.device.white_balance_temperature);
   }
 
   if (j.contains("model")) {

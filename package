@@ -7,6 +7,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Compiled models live in the shared build cache (scripts/build-models.sh writes
+# <cache>/models/<SOC>/), not in install/. Resolve MODELS_DIR via the single
+# source of truth.
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/scripts/lib/cache.sh"   # sets MODELS_DIR (and CACHE_DIR, SDK_*)
+
 # Cleanup on exit
 cleanup_on_exit() {
     local exit_code=$?
@@ -52,7 +58,7 @@ EXTENSION_PACKAGE="anomaly-detection-ext-${TIMESTAMP}.zip"
 # Supported SOCs and their mappings
 declare -A SOC_PLATFORMS=(
     ["RK3588"]="XT5"
-    ["RK3576"]="Firebird" 
+    ["RK3576"]="XS6/XD6"
     ["RK3568"]="LS5"
 )
 
@@ -74,7 +80,7 @@ usage() {
     echo ""
     echo "SOC Support:"
     echo "  RK3588  -> XT-5 players (XT1145, XT2145)"
-    echo "  RK3576  -> Firebird development boards"
+    echo "  RK3576  -> XS6/XD6 players"
     echo "  RK3568  -> LS-5 players (LS445)"
     echo ""
     echo "Model Support:"
@@ -136,7 +142,7 @@ check_prerequisites() {
             continue
         fi
         
-        local build_dir="build_${SOC_PLATFORMS[$soc],,}"
+        local build_dir="build_${soc,,}"
         if [[ -f "$build_dir/anomaly_detection" ]]; then
             found_binaries=true
             break
@@ -159,7 +165,7 @@ check_prerequisites() {
     fi
 
     if [[ "$found_binaries" != "true" ]]; then
-        error "No compiled binaries found. Please run build process (./scripts/runall.sh) first."
+        error "No compiled binaries found. Run 'make build-engine' first."
     fi
 
     # Check for compiled models
@@ -169,15 +175,14 @@ check_prerequisites() {
             continue
         fi
         
-        local install_dir="install/$soc"
-        if [[ -d "$install_dir/model" ]] && [[ -f "$install_dir/model/mobilenetv2-embedding-${soc,,}.rknn" ]]; then
+        if [[ -f "${MODELS_DIR}/$soc/mobilenetv2-embedding-${soc,,}.rknn" ]]; then
             found_models=true
             break
         fi
     done
 
     if [[ "$found_models" != "true" ]]; then
-        error "No compiled models found. Please ensure MobileNetV2 models are compiled for each SOC."
+        error "No compiled models found in ${MODELS_DIR}. Run 'make build-models' first."
     fi
 
     # Warn (non-fatal) if YOLOX model is missing — ROI detection falls back to OpenCV
@@ -186,9 +191,9 @@ check_prerequisites() {
             continue
         fi
         local yolox_name="yolox_s_${soc,,}.rknn"
-        if [[ ! -f "install/$soc/model/$yolox_name" ]]; then
+        if [[ ! -f "${MODELS_DIR}/$soc/$yolox_name" ]]; then
             warn "YOLOX-S model missing for $soc ($yolox_name) — TV detection will use OpenCV fallback."
-            warn "Run: ./compile-models to build it."
+            warn "Run: make build-models to build it."
         fi
     done
 
@@ -240,10 +245,10 @@ copy_binaries() {
         fi
         
         local platform="${SOC_PLATFORMS[$soc]}"
-        local build_dir="build_${platform,,}"
+        local build_dir="build_${soc,,}"
         local install_dir="install/$soc"
         local package_soc_dir="staging/$soc"
-        
+
         log "Copying $soc ($platform) binaries..."
         
         # Try build directory first, then install directory
@@ -272,6 +277,14 @@ copy_binaries() {
             chmod +x "$package_soc_dir/image-stream-server"
         else
             warn "image-stream-server not found in $source_dir"
+        fi
+
+        # Copy config-server binary (on-player ROI editor)
+        if [[ -f "$source_dir/config-server" ]]; then
+            cp "$source_dir/config-server" "$package_soc_dir/"
+            chmod +x "$package_soc_dir/config-server"
+        else
+            warn "config-server not found in $source_dir"
         fi
 
         # Copy capture helper script (installed by cmake alongside the binary)
@@ -341,12 +354,13 @@ copy_models() {
         
         local platform="${SOC_PLATFORMS[$soc]}"
         local install_dir="install/$soc"
+        local models_src="${MODELS_DIR}/$soc"
         local package_soc_dir="staging/$soc"
-        
-        log "Copying $soc ($platform) models from $install_dir..."
-        
-        if [[ ! -d "$install_dir/model" ]]; then
-            warn "Model directory $install_dir/model not found, skipping $soc models"
+
+        log "Copying $soc ($platform) models from $models_src..."
+
+        if [[ ! -d "$models_src" ]]; then
+            warn "Model directory $models_src not found, skipping $soc models"
             continue
         fi
 
@@ -354,8 +368,8 @@ copy_models() {
 
         # Copy MobileNetV2 embedding model
         local model_name="mobilenetv2-embedding-${soc,,}.rknn"
-        if [[ -f "$install_dir/model/$model_name" ]]; then
-            cp "$install_dir/model/$model_name" "$package_soc_dir/model/"
+        if [[ -f "$models_src/$model_name" ]]; then
+            cp "$models_src/$model_name" "$package_soc_dir/model/"
             log "Copied MobileNetV2 model for $soc"
         else
             warn "MobileNetV2 model ($model_name) not found for $soc"
@@ -363,8 +377,8 @@ copy_models() {
 
         # Copy YOLOX-S TV detection model (used during startup ROI detection)
         local yolox_name="yolox_s_${soc,,}.rknn"
-        if [[ -f "$install_dir/model/$yolox_name" ]]; then
-            cp "$install_dir/model/$yolox_name" "$package_soc_dir/model/"
+        if [[ -f "$models_src/$yolox_name" ]]; then
+            cp "$models_src/$yolox_name" "$package_soc_dir/model/"
             log "Copied YOLOX-S TV detection model for $soc"
         else
             warn "YOLOX-S model ($yolox_name) not found for $soc — TV auto-detection will fall back to OpenCV"
@@ -403,7 +417,7 @@ copy_configs() {
             log "Copied etc configs for $soc"
         fi
         
-        # Copy config/ directory if it exists (correct location for videowall.json)
+        # Copy config/ directory if it exists (holds the single config.json)
         if [[ -d "$install_dir/config" ]]; then
             mkdir -p "$package_soc_dir/config"
             cp -r "$install_dir/config"/* "$package_soc_dir/config/"
@@ -488,9 +502,9 @@ generate_manifest() {
             player_items+=("    {\"series\": \"5\", \"models\": [\"LS445\"], \"features\": [\"npu\"]}")
         fi
         
-        # RK3576 -> Firebird development boards
+        # RK3576 -> Series 6 players (XS6, XD6)
         if [[ "$soc_array" =~ "RK3576" ]]; then
-            player_items+=("    {\"series\": \"firebird\", \"models\": [\"dev\"], \"features\": [\"npu\"], \"experimental\": true}")
+            player_items+=("    {\"series\": \"6\", \"models\": [\"XS6\", \"XD6\"], \"features\": [\"npu\"]}")
         fi
         
         if [[ ${#player_items[@]} -gt 0 ]]; then
@@ -704,14 +718,46 @@ create_extension_package() {
     local package_size=$(du -sh "$EXTENSION_PACKAGE" 2>/dev/null | cut -f1)
     success "Extension package created: $EXTENSION_PACKAGE ($package_size)"
 
+    generate_install_helper
+
     echo ""
     echo "Extension Package Usage:"
-    echo "1. Transfer $EXTENSION_PACKAGE to player via DWS"
-    echo "2. On player: mkdir -p /usr/local && cd /usr/local"
-    echo "3. On player: unzip /storage/sd/$EXTENSION_PACKAGE"
-    echo "4. On player: bash ./ext_npu_anomaly_install-lvm.sh"
-    echo "5. On player: reboot"
+    echo "1. make copy   (scp the zip + install-on-player.sh to /storage/sd/)"
+    echo "2. On the player's ROOT shell: sh /storage/sd/install-on-player.sh"
+    echo "   (it unzips, runs ext_npu_anomaly_install-lvm.sh, prunes old zips, reboots)"
     echo "Note: Extension installation is permanent (persists across reboots)"
+}
+
+# Generate the on-device install helper for THIS build. It is a build artifact
+# (gitignored, removed by 'make clean') that embeds this build's exact zip name,
+# so /storage/sd accumulating old zips never confuses the install target.
+generate_install_helper() {
+    local helper="install-on-player.sh"
+    local this_zip="$EXTENSION_PACKAGE"
+    local installer="ext_npu_anomaly_install-lvm.sh"
+
+    # Unquoted heredoc: build-time vars (this_zip/installer) expand now; runtime
+    # shell vars are escaped (\$1) so they evaluate on the player. The SD-zip
+    # pruning is done inside ${installer} itself, so it also happens when that
+    # install script is run directly.
+    cat > "$helper" <<EOF
+#!/bin/sh
+# Auto-generated by ./package for ${this_zip}. Run on the player's ROOT shell:
+#   sh /storage/sd/install-on-player.sh
+# Reboots on success; on failure it exits 1 WITHOUT rebooting so you can inspect.
+set -u
+
+fail() { echo "install-on-player: ERROR: \$1" >&2; exit 1; }
+
+cd /usr/local || fail "cannot cd /usr/local"
+unzip -o "/storage/sd/${this_zip}" || fail "unzip failed"
+bash ./${installer} || fail "extension install (${installer}) failed"
+
+echo "install-on-player: installed ${this_zip}; rebooting..."
+reboot
+EOF
+    chmod +x "$helper"
+    success "Generated $helper (installs ${this_zip})"
 }
 
 # Cleanup staging directory

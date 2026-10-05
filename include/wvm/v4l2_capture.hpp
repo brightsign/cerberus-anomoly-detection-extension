@@ -29,6 +29,7 @@ private:
   uint64_t last_stats_time_ = 0;
 
   bool init_device();
+  void apply_camera_controls();   // best-effort exposure/gain/WB per config
   bool init_mmap();
 };
 
