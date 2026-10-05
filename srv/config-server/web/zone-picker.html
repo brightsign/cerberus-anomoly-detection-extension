@@ -25,6 +25,9 @@
   th { color: #9aa4b2; }
   .muted { color: #9aa4b2; }
   .pill { background: #0f1216; border: 1px solid #333b47; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+  .tune { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; font-size: 13px; }
+  .tune label { color: #c9d1dc; }
+  .tune input { width: 90px; background: #0f1216; color: #e6e9ee; border: 1px solid #333b47; border-radius: 5px; padding: 4px 6px; text-align: right; }
 </style>
 </head>
 <body>
@@ -49,7 +52,13 @@
     <table><thead><tr><th>id</th><th>x</th><th>y</th><th>w</th><th>h</th><th></th></tr></thead>
     <tbody id="rows"></tbody></table>
 
-    <div class="row">
+    <details id="tunewrap" style="margin-top:12px">
+      <summary style="cursor:pointer;color:#9aa4b2">TV-off detection tuning</summary>
+      <div class="hint" style="margin:6px 0">Lower the recover debounce / loosen the exit thresholds to detect screen-on faster (too loose = flicker between OFF/ON).</div>
+      <div id="health" class="tune"></div>
+    </details>
+
+    <div class="row" style="margin-top:12px">
       <button id="save" class="primary">Save</button>
       <button id="restart" class="warn">Restart</button>
       <span id="state" class="muted"></span>
@@ -126,17 +135,62 @@
   img.addEventListener('load', fit);
   window.addEventListener('resize', fit);
 
+  // --- TV-off detection tuning (config.health) ---
+  // Each field edits one health key; def = the engine default shown when the
+  // loaded config does not set it.
+  var HEALTH_FIELDS = [
+    { k: 'persist_off_ms',          label: 'OFF enter debounce (ms)',  step: 100,  def: 3000 },
+    { k: 'persist_off_recover_ms',  label: 'ON recover debounce (ms)', step: 100,  def: 5000 },
+    { k: 'off_dark_ratio_exit',     label: 'dark-ratio exit',          step: 0.01, def: 0.30 },
+    { k: 'off_sat_mean_exit',       label: 'saturation exit',          step: 1,    def: 35 },
+    { k: 'off_laplacian_var_exit',  label: 'detail (laplacian) exit',  step: 10,   def: 500 },
+    { k: 'off_temporal_diff_exit',  label: 'motion (temporal) exit',   step: 0.1,  def: 4.0 }
+  ];
+  (function buildHealthInputs() {
+    var box = document.getElementById('health');
+    HEALTH_FIELDS.forEach(function (f) {
+      var lab = document.createElement('label'); lab.textContent = f.label; lab.htmlFor = 'h_' + f.k;
+      var inp = document.createElement('input');
+      inp.type = 'number'; inp.id = 'h_' + f.k; inp.step = f.step; inp.value = f.def;
+      box.appendChild(lab); box.appendChild(inp);
+    });
+  })();
+  function populateHealth(cfg) {
+    var h = (cfg && cfg.health) || {};
+    HEALTH_FIELDS.forEach(function (f) {
+      var v = (h[f.k] !== undefined && h[f.k] !== null) ? h[f.k] : f.def;
+      document.getElementById('h_' + f.k).value = v;
+    });
+  }
+  function readHealth() {
+    var h = {};
+    HEALTH_FIELDS.forEach(function (f) {
+      var n = parseFloat(document.getElementById('h_' + f.k).value);
+      if (!isNaN(n)) h[f.k] = n;
+    });
+    return h;
+  }
+
+  // Build the config to save: current zones + current health edits, every other
+  // key of the loaded config preserved.
+  function currentConfig() {
+    var cfg = ZP.mergeRoi(config, boxes);
+    cfg.health = Object.assign({ enabled: true }, cfg.health || {}, readHealth());
+    return cfg;
+  }
+
   document.getElementById('save').onclick = function () { save(false); };
   document.getElementById('restart').onclick = function () { save(true); };
 
   function save(thenRestart) {
     if (!config) { stateEl.textContent = 'no config loaded'; return; }
     stateEl.textContent = 'saving...';
+    var cfg = currentConfig();
     fetch('/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                       body: JSON.stringify(ZP.mergeRoi(config, boxes), null, 2) })
+                       body: JSON.stringify(cfg, null, 2) })
       .then(function (r) {
         if (!r.ok) throw new Error('save failed (' + r.status + ')');
-        config = ZP.mergeRoi(config, boxes);
+        config = cfg;
         if (!thenRestart) { stateEl.textContent = 'saved'; return; }
         // Restarting the extension kills THIS server (it is part of the extension),
         // so the /restart response may never arrive -- fire it and don't depend on
@@ -176,7 +230,7 @@
   fetch('/config').then(function (r) { return r.ok ? r.json() : null; })
     .then(function (cfg) {
       if (!cfg) { stateEl.textContent = 'could not load config'; return; }
-      config = cfg; boxes = ZP.configToBoxes(cfg); redraw();
+      config = cfg; boxes = ZP.configToBoxes(cfg); populateHealth(cfg); redraw();
       stateEl.textContent = boxes.length + ' zone(s) loaded';
     })
     .catch(function () { stateEl.textContent = 'could not load config'; });
