@@ -12,6 +12,17 @@ struct DeviceConfig {
   int height = 1080;
   int fps = 30;
   PixelFormat pixel_format = PixelFormat::YUYV;
+
+  // Camera exposure. Auto-exposure/auto-gain chase scene brightness, so when one
+  // bright screen turns off the camera re-exposes and the remaining off screens
+  // can read as ON. Set auto_exposure=false to pin a fixed exposure so the image
+  // (and thus per-ROI luma) stays stable. When an auto_* flag is true its V4L2
+  // controls are left untouched (current behavior).
+  bool auto_exposure = true;
+  int exposure_absolute = 250;            // V4L2 units (UVC: 100us); used when auto_exposure=false
+  int gain = 0;                           // used when auto_exposure=false
+  bool auto_white_balance = true;
+  int white_balance_temperature = 4000;   // Kelvin; used when auto_white_balance=false
 };
 
 struct ModelConfig {

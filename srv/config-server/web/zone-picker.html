@@ -61,6 +61,12 @@
     <table><thead><tr><th>id</th><th>x</th><th>y</th><th>w</th><th>h</th><th></th></tr></thead>
     <tbody id="rows"></tbody></table>
 
+    <details id="camwrap" open style="margin-top:12px">
+      <summary style="cursor:pointer;color:#e6e9ee;font-weight:600">Camera exposure</summary>
+      <div class="hint" style="margin:6px 0">Turn OFF auto-exposure and pin exposure/gain so the image stays constant when a screen turns on/off (prevents still-off screens from reading ON). Needs Save &amp; Restart.</div>
+      <div id="camera" class="tune"></div>
+    </details>
+
     <details id="tunewrap" open style="margin-top:12px">
       <summary style="cursor:pointer;color:#e6e9ee;font-weight:600">TV-off detection tuning</summary>
       <div class="hint" style="margin:6px 0">Lower the recover debounce / loosen the exit thresholds to detect screen-on faster (too loose = flicker between OFF/ON).</div>
@@ -161,42 +167,67 @@
     { k: 'off_temporal_diff_exit',  label: 'motion (temporal) exit',   step: 0.1,  def: 4.0,
       help: 'Counts as ON when frame-to-frame motion rises above this. Lower = less motion needed to count as on. (Any one exit threshold passing = ON.)' }
   ];
-  (function buildHealthInputs() {
-    var box = document.getElementById('health');
-    HEALTH_FIELDS.forEach(function (f) {
+  var CAMERA_FIELDS = [
+    { k: 'auto_exposure', label: 'auto exposure', type: 'bool', def: true,
+      help: 'Camera auto-exposure chases scene brightness. Turn this OFF so the image stays constant when a screen turns on/off -- otherwise a still-off screen can read as ON.' },
+    { k: 'exposure_absolute', label: 'exposure', step: 10, def: 250,
+      help: 'Fixed exposure time (lower = darker image). Only used when auto exposure is OFF. Dial down until off screens are solidly dark.' },
+    { k: 'gain', label: 'gain', step: 1, def: 0,
+      help: 'Fixed sensor gain (lower = darker, less noise). Only used when auto exposure is OFF.' },
+    { k: 'auto_white_balance', label: 'auto white balance', type: 'bool', def: true,
+      help: 'Turn OFF to pin the color temperature so it does not shift with scene changes.' },
+    { k: 'white_balance_temperature', label: 'white balance (K)', step: 100, def: 4000,
+      help: 'Fixed color temperature in Kelvin. Only used when auto white balance is OFF.' }
+  ];
+
+  // Generic field builder: prefix avoids id collisions; type 'bool' -> checkbox.
+  function buildFields(prefix, containerId, fields) {
+    var box = document.getElementById(containerId);
+    fields.forEach(function (f) {
       var cell = document.createElement('div'); cell.className = 'lbl';
       var txt = document.createElement('span'); txt.textContent = f.label; cell.appendChild(txt);
       if (f.help) {
         var ic = document.createElement('span'); ic.className = 'info'; ic.textContent = 'i';
-        ic.setAttribute('data-tip', f.help); ic.setAttribute('title', f.help);  // title = fallback tooltip
+        ic.setAttribute('data-tip', f.help); ic.setAttribute('title', f.help);
         cell.appendChild(ic);
       }
       var inp = document.createElement('input');
-      inp.type = 'number'; inp.id = 'h_' + f.k; inp.step = f.step; inp.value = f.def;
+      inp.id = prefix + f.k;
+      if (f.type === 'bool') { inp.type = 'checkbox'; inp.checked = !!f.def; inp.style.width = 'auto'; }
+      else { inp.type = 'number'; inp.step = f.step; inp.value = f.def; }
       box.appendChild(cell); box.appendChild(inp);
     });
-  })();
-  function populateHealth(cfg) {
-    var h = (cfg && cfg.health) || {};
-    HEALTH_FIELDS.forEach(function (f) {
-      var v = (h[f.k] !== undefined && h[f.k] !== null) ? h[f.k] : f.def;
-      document.getElementById('h_' + f.k).value = v;
+  }
+  function populateFields(prefix, fields, obj) {
+    obj = obj || {};
+    fields.forEach(function (f) {
+      var has = obj[f.k] !== undefined && obj[f.k] !== null;
+      var inp = document.getElementById(prefix + f.k);
+      if (f.type === 'bool') inp.checked = has ? !!obj[f.k] : !!f.def;
+      else inp.value = has ? obj[f.k] : f.def;
     });
   }
-  function readHealth() {
-    var h = {};
-    HEALTH_FIELDS.forEach(function (f) {
-      var n = parseFloat(document.getElementById('h_' + f.k).value);
-      if (!isNaN(n)) h[f.k] = n;
+  function readFields(prefix, fields) {
+    var o = {};
+    fields.forEach(function (f) {
+      var inp = document.getElementById(prefix + f.k);
+      if (f.type === 'bool') o[f.k] = inp.checked;
+      else { var n = parseFloat(inp.value); if (!isNaN(n)) o[f.k] = n; }
     });
-    return h;
+    return o;
   }
 
-  // Build the config to save: current zones + current health edits, every other
-  // key of the loaded config preserved.
+  buildFields('h_', 'health', HEALTH_FIELDS);
+  buildFields('c_', 'camera', CAMERA_FIELDS);
+  function populateHealth(cfg) { populateFields('h_', HEALTH_FIELDS, cfg && cfg.health); }
+  function populateCamera(cfg) { populateFields('c_', CAMERA_FIELDS, cfg && cfg.device); }
+
+  // Build the config to save: current zones + current health/camera edits, every
+  // other key of the loaded config preserved.
   function currentConfig() {
     var cfg = ZP.mergeRoi(config, boxes);
-    cfg.health = Object.assign({ enabled: true }, cfg.health || {}, readHealth());
+    cfg.health = Object.assign({ enabled: true }, cfg.health || {}, readFields('h_', HEALTH_FIELDS));
+    cfg.device = Object.assign({}, cfg.device || {}, readFields('c_', CAMERA_FIELDS));
     return cfg;
   }
 
@@ -251,7 +282,7 @@
   fetch('/config').then(function (r) { return r.ok ? r.json() : null; })
     .then(function (cfg) {
       if (!cfg) { stateEl.textContent = 'could not load config'; return; }
-      config = cfg; boxes = ZP.configToBoxes(cfg); populateHealth(cfg); redraw();
+      config = cfg; boxes = ZP.configToBoxes(cfg); populateHealth(cfg); populateCamera(cfg); redraw();
       stateEl.textContent = boxes.length + ' zone(s) loaded';
     })
     .catch(function () { stateEl.textContent = 'could not load config'; });
