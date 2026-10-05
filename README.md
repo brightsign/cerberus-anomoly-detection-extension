@@ -16,15 +16,18 @@ __Implementation__: Main entry point in `src/main.cpp`, supporting modules in `s
 
 The build is driven by a `Makefile`. The cross SDK, the RKNN toolkit, and the
 `rknn_tk2` model-compile image are **not** vendored here: they are provisioned
-once per build box by the sibling [`brightsign-sdk-builder`](https://github.com/BrightSign-Playground/brightsign-sdk-builder)
+once per build box by the sibling [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder)
 repo into a shared cache outside this repo (default `../argus-build-cache`,
 override with `ARGUS_CACHE_DIR`). This project compiles its own per-SoC models
 into that cache and cross-compiles against the cached SDK.
 
-**One-time per build box** — populate the shared cache:
+**One-time per build box** — populate the shared cache. You only do this **once**:
+the cache lives outside any single repo, so once it exists **many of our example
+extensions reuse it** (no per-repo SDK rebuild).
 
 ```bash
-cd ../brightsign-sdk-builder && make build   # builds SDK + toolkit + rknn_tk2 into the cache
+git clone https://github.com/brightsign/brightsign-sdk-builder.git
+cd brightsign-sdk-builder && make build   # builds SDK + toolkit + rknn_tk2 into the shared cache
 ```
 
 Check what the cache holds at any time:
