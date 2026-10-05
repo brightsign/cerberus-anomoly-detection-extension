@@ -24,6 +24,57 @@ STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
 CONFIG_SERVER_PIDFILE="/var/run/bsext-config-server.pid"
 MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
 
+# The player is BusyBox and has NO pkill/pgrep (killall exists). Provide minimal
+# /proc-scanning shims so the stop/kill logic below actually works on-device --
+# otherwise processes survive, hold the squashfs mount busy, and a reinstall
+# fails to unmount. Supports: pgrep -f <regex>; pkill [-SIG] -f <regex>;
+# pkill [-SIG] -P <ppid>.
+if ! command -v pgrep >/dev/null 2>&1; then
+pgrep() {
+    local pat=""
+    while [ $# -gt 0 ]; do case "$1" in -f) pat="$2"; shift ;; *) pat="$1" ;; esac; shift; done
+    local d pid cl
+    for d in /proc/[0-9]*; do
+        pid=${d#/proc/}
+        [ -r "$d/cmdline" ] || continue
+        cl=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+        [ -n "$cl" ] || continue
+        printf '%s\n' "$cl" | grep -Eq -- "$pat" && echo "$pid"
+    done
+}
+fi
+if ! command -v pkill >/dev/null 2>&1; then
+pkill() {
+    local sig=TERM mode="" arg=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -[0-9]*) sig=${1#-} ;;
+            -f) mode=f; arg="$2"; shift ;;
+            -P) mode=P; arg="$2"; shift ;;
+            *) arg="$1" ;;
+        esac
+        shift
+    done
+    local d pid cl ppid
+    if [ "$mode" = f ]; then
+        for d in /proc/[0-9]*; do
+            pid=${d#/proc/}
+            [ "$pid" = "$$" ] && continue
+            [ -r "$d/cmdline" ] || continue
+            cl=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+            [ -n "$cl" ] || continue
+            printf '%s\n' "$cl" | grep -Eq -- "$arg" && kill -"$sig" "$pid" 2>/dev/null
+        done
+    elif [ "$mode" = P ]; then
+        for d in /proc/[0-9]*; do
+            pid=${d#/proc/}
+            ppid=$(awk '{print $4}' "$d/stat" 2>/dev/null)
+            [ "$ppid" = "$arg" ] && kill -"$sig" "$pid" 2>/dev/null
+        done
+    fi
+}
+fi
+
 # defaults -- these can be overridden by environment variables
 DISABLE_AUTO_START=false
 
