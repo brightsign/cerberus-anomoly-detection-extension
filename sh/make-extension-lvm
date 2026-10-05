@@ -108,6 +108,18 @@ bsfw_write_extension_lvm() {
         # Now we know that the volume is correct we can rename it so
         # it can be used.
         echo "lvrename bsos '${tmp_vol_name}' '${mapper_vol_name}'"
+
+        # Prune install zips from /storage/sd, keeping only the newest extension
+        # zip (the one just installed). Runs here so it happens no matter how this
+        # script was launched (directly or via install-on-player.sh). Only touches
+        # this project's zips.
+        echo "echo \"Pruning old install zips from /storage/sd (keeping the newest)...\""
+        echo "_keep=\$(ls -t /storage/sd/anomaly-detection-ext-*.zip 2>/dev/null | head -1)"
+        echo "for _z in /storage/sd/anomaly-detection-ext-*.zip /storage/sd/anomaly-detection-dev-*.zip; do"
+        echo "    [ -e \"\$_z\" ] || continue"
+        echo "    [ \"\$_z\" = \"\$_keep\" ] && continue"
+        echo "    rm -f \"\$_z\""
+        echo "done"
     )
 }
 
