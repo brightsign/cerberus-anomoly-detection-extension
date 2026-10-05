@@ -35,6 +35,8 @@ type server struct {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/zone-picker.logic.js", func(w http.ResponseWriter, r *http.Request) {
+		// no-store so a reinstalled extension's page is never masked by browser cache.
+		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/javascript")
 		w.Write(logicJS)
 	})
@@ -45,6 +47,7 @@ func (s *server) routes() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(htmlPage)
 	})
