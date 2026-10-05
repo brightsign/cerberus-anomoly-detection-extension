@@ -61,11 +61,16 @@ if [ -z "${INSTALLER}" ] || [ ! -f "${INSTALLER}" ]; then
     cat <<EOF
 No cross-compile SDK found in the shared cache, and no toolchain installer on hand.
 
-The SDK is provisioned once per build box by the brightsign-sdk-builder repo,
-which downloads the BrightSign OS source, builds the custom SDK, and installs it
-into the shared cache this repo reads. From a checkout parallel to this one:
+The SDK is built ONCE per build box by the brightsign-sdk-builder repo
+(https://github.com/brightsign/brightsign-sdk-builder): it downloads the
+BrightSign OS source and builds the SDK + RKNN toolkit + rknn_tk2 image into the
+shared cache this repo reads. You only do this once -- the cache is shared, so
+many of our example extensions reuse it.
 
-    cd ../brightsign-sdk-builder && make build
+Clone (or locate) brightsign-sdk-builder and run it once:
+
+    git clone https://github.com/brightsign/brightsign-sdk-builder.git
+    cd brightsign-sdk-builder && make build
 
 That populates ${SDK_DIR}. Then re-run this build.
 
