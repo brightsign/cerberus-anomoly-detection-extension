@@ -380,13 +380,16 @@ run_config_server() {
     SOC_NAME=$(get_soc_name)
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
     local sd_config="/storage/sd/configs/config.json"
+    # bsext_init lives at the extension ROOT (SCRIPT_PATH), not inside the SoC
+    # dir -- pass its real path so the Save & Restart button can exec it.
+    local bsext_init_path="${SCRIPT_PATH}/bsext_init"
 
     if [ "$background" = "true" ]; then
         start-stop-daemon --start --background --make-pidfile --pidfile ${CONFIG_SERVER_PIDFILE} \
                           --exec ${SOC_HOME}/config-server -- \
-                          -port ${port} -config ${sd_config} -soc-home ${SOC_HOME}
+                          -port ${port} -config ${sd_config} -bsext-init ${bsext_init_path}
     else
-        ${SOC_HOME}/config-server -port ${port} -config ${sd_config} -soc-home ${SOC_HOME}
+        ${SOC_HOME}/config-server -port ${port} -config ${sd_config} -bsext-init ${bsext_init_path}
     fi
 }
 

@@ -137,12 +137,35 @@
       .then(function (r) {
         if (!r.ok) throw new Error('save failed (' + r.status + ')');
         config = ZP.mergeRoi(config, boxes);
-        if (!thenRestart) { stateEl.textContent = 'saved'; return null; }
-        stateEl.textContent = 'saved, restarting...';
-        return fetch('/restart', { method: 'POST' });
+        if (!thenRestart) { stateEl.textContent = 'saved'; return; }
+        // Restarting the extension kills THIS server (it is part of the extension),
+        // so the /restart response may never arrive -- fire it and don't depend on
+        // the reply, then poll until the server comes back and reload.
+        fetch('/restart', { method: 'POST' }).catch(function () {});
+        setTimeout(waitForRestart, 1500);
       })
-      .then(function (r) { if (r) stateEl.textContent = r.ok ? 'restarting' : 'restart failed'; })
       .catch(function (e) { stateEl.textContent = String(e.message || e); });
+  }
+
+  function waitForRestart() {
+    var tries = 0;
+    stateEl.textContent = 'restarting service, reconnecting...';
+    var iv = setInterval(function () {
+      tries++;
+      fetch('/config', { cache: 'no-store' })
+        .then(function (r) {
+          if (r && r.ok) {
+            clearInterval(iv);
+            stateEl.textContent = 'restarted';
+            setTimeout(function () { location.reload(); }, 600);
+          }
+        })
+        .catch(function () { /* server still down; keep polling */ });
+      if (tries > 45) {   // ~90s
+        clearInterval(iv);
+        stateEl.textContent = 'restarted (if the view is stale, reload the page)';
+      }
+    }, 2000);
   }
 
   // Load the live config + camera from the player this page is served by.

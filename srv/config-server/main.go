@@ -112,23 +112,23 @@ func atomicWrite(path string, data []byte) error {
 func main() {
 	port := flag.Int("port", 20300, "listen port")
 	cfg := flag.String("config", "/storage/sd/configs/config.json", "config file to serve/edit")
-	socHome := flag.String("soc-home", "", "extension dir containing bsext_init (for restart)")
+	bsextInit := flag.String("bsext-init", "", "full path to the extension's bsext_init script (for restart)")
 	flag.Parse()
 
 	s := &server{
 		configPath: *cfg,
 		restart: func() error {
-			if *socHome == "" {
-				return errors.New("soc-home not set; cannot restart")
+			if *bsextInit == "" {
+				return errors.New("bsext-init path not set; cannot restart")
 			}
 			// Fully detach the restart: sh backgrounds bsext_init and exits, so the
 			// restart reparents to init (pid 1). This matters because bsext_init
 			// restart's stop step kills config-server AND its child processes -- if
-			// the restart were still our child it would kill itself. We also avoid
-			// `setsid`, which is not present on the player's BusyBox (that was the
-			// original "restart failed"). The HTTP 200 is written before this runs.
-			initScript := filepath.Join(*socHome, "bsext_init")
-			return exec.Command("sh", "-c", initScript+" restart >/dev/null 2>&1 &").Start()
+			// the restart were still our child it would kill itself. We avoid
+			// `setsid` (absent on the player's BusyBox). Output goes to a log so a
+			// failing restart is visible instead of silently discarded.
+			return exec.Command("sh", "-c",
+				*bsextInit+" restart >>/tmp/config-server-restart.log 2>&1 &").Start()
 		},
 	}
 	addr := ":" + strconv.Itoa(*port)
