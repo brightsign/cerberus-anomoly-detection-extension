@@ -1,6 +1,6 @@
 {
   "extension": {
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "NPU-accelerated video wall monitoring and anomaly detection using MobileNetV2 embeddings",
     "author": {
       "name": "BrightSign LLC",
