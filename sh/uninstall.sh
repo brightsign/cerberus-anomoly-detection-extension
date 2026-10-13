@@ -1,22 +1,22 @@
 #!/bin/bash
 
 # stop the extension
-/var/volatile/bsext/ext_npu_argus/bsext_init stop
+/var/volatile/bsext/ext_npu_anomaly/bsext_init stop
 
 # check that all the processes are stopped
-# ps | grep bsext_npu_argus
+# ps | grep bsext_npu_anomaly
 
 # unmount the extension
-umount /var/volatile/bsext/ext_npu_argus
+umount /var/volatile/bsext/ext_npu_anomaly
 # remove the extension
-rm -rf /var/volatile/bsext/ext_npu_argus
+rm -rf /var/volatile/bsext/ext_npu_anomaly
 
 # remove the extension from the system
-lvremove --yes /dev/mapper/bsext_npu_argus
+lvremove --yes /dev/mapper/bsext_npu_anomaly
 # if that path does not exist, you can try
-lvremove --yes /dev/mapper/bsos-ext_npu_argus
+lvremove --yes /dev/mapper/bsos-ext_npu_anomaly
 
-rm -rf /dev/mapper/bsext_npu_argus
-rm -rf /dev/mapper/bsos-ext_npu_argus
+rm -rf /dev/mapper/bsext_npu_anomaly
+rm -rf /dev/mapper/bsos-ext_npu_anomaly
 
 # reboot

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## v0.1.1 — 2026-10-06
+
+### Fixed
+- **Bundled uninstall script targeted the wrong extension.** `sh/uninstall.sh`
+  still referenced the forked-from `npu_argus` name, so on a player it operated on
+  `ext_npu_argus` paths/LVM volume instead of `ext_npu_anomaly` — failing to remove
+  this extension and, on a player that also had Argus installed, removing the wrong
+  one. All references corrected to `npu_anomaly`. The script ships inside the
+  extension squashfs, so this requires a rebuild (and re-sign) to take effect.
+
+### Docs
+- Corrected the `brightsign-sdk-builder` repo/URL and clarified the one-time,
+  shared-cache setup in `README.md` and `scripts/fetch-sdk.sh`.
+
 ## v0.1.0 — 2026-10-05
 
 First tagged release of the BrightSign NPU anomaly-detection extension (XT5 /
