@@ -12,40 +12,101 @@ NPU-accelerated video wall monitoring on BrightSign device using camera-based RO
 
 __Implementation__: Main entry point in `src/main.cpp`, supporting modules in `src/wvm/`, headers in `include/wvm/`. See [DESIGN.md](DESIGN.md) for architecture details.
 
+> ## Before you build — read [docs/PRE-REQS.md](docs/PRE-REQS.md)
+>
+> This repo does **not** contain the cross-compile SDK or the large model/toolkit
+> artifacts. They live in a **shared build cache outside the repo**, built once per
+> box by [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder)
+> and reused across our NPU extensions. **[docs/PRE-REQS.md](docs/PRE-REQS.md)**
+> explains how to build the SDK, populate the cache, and point this repo at it via
+> `cache.env`.
+>
+> On a box that already has the cache: set `BS_CACHE_DIR` in `cache.env` (copy
+> `cache.env.example`), run `make cache-info`, then `make build`.
+
+## Contents
+
+1. [Prerequisites (SDK & build cache)](docs/PRE-REQS.md)
+2. [Build](#build)
+
 ## Build
 
 The build is driven by a `Makefile`. The cross SDK, the RKNN toolkit, and the
 `rknn_tk2` model-compile image are **not** vendored here: they are provisioned
 once per build box by the sibling [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder)
-repo into a shared cache outside this repo (default `../argus-build-cache`,
-override with `ARGUS_CACHE_DIR`). This project compiles its own per-SoC models
-into that cache and cross-compiles against the cached SDK.
+repo into a **shared build cache outside this repo** (`sdk/`, `toolkit/`,
+`models/`) and reused by every BrightSign NPU extension. First-time setup is four
+steps: **(1)** download and compile the SDK into the cache, **(2)** compile the
+models into the cache, **(3)** point this repo at the cache, then **(4)** build.
+See **[docs/PRE-REQS.md](docs/PRE-REQS.md)** for the full version with a diagram,
+supported targets, and troubleshooting.
 
-**One-time per build box** — populate the shared cache. You only do this **once**:
-the cache lives outside any single repo, so once it exists **many of our example
-extensions reuse it** (no per-repo SDK rebuild).
+#### Step 1 — Download and compile the SDK into the cache (once per build box)
+
+The SDK is produced by `brightsign-sdk-builder`, which downloads the BrightSign
+OS source and cross-compiles the toolchain straight into the shared cache. You do
+this **once per box** — the cache lives outside any single repo, so once it exists
+**many of our extensions reuse it** (no per-repo SDK rebuild). Check it out
+**parallel** to this repo and build it:
 
 ```bash
+cd ..
 git clone https://github.com/brightsign/brightsign-sdk-builder.git
-cd brightsign-sdk-builder && make build   # builds SDK + toolkit + rknn_tk2 into the shared cache
+cd brightsign-sdk-builder
+make build        # builds SDK + toolkit + rknn_tk2 into the shared cache (network + ~25 GB; HOURS)
 ```
 
-Check what the cache holds at any time:
+> **Or let this repo do it for you.** If the cache is configured but has no SDK,
+> `make build` / `make fetch-sdk` in **this** repo auto-runs the builder (it is a
+> build dependency). Disable with `BS_SDK_AUTOBUILD=0` (you then get manual
+> instructions), or point `SDK_BUILDER_DIR` at an existing checkout. See
+> [docs/PRE-REQS.md § Phase 1](docs/PRE-REQS.md#phase-1--build-the-sdk-and-populate-the-cache-one-time-per-box).
+> Either way the SDK is a one-time, hours-long build.
+
+#### Step 2 — Compile the NPU models into the cache (needs Docker)
 
 ```bash
-make cache-info
+# in this repo
+make build-models   # compile per-SoC .rknn into <cache>/models/<SOC>/ (needs the rknn_tk2 image)
 ```
 
-**Full build (fetch SDK from cache, prep, compile models, cross-compile, package):**
+Idempotent — a no-op once the models are present. `make build` runs this step
+too, so you can skip it and let the full build compile the models on first run.
+
+#### Step 3 — Configure this repo to point at the cache
+
+If this repo is checked out parallel to `brightsign-sdk-builder` (so the default
+sibling cache resolves automatically), this step is optional. Otherwise, tell the
+repo where the cache lives:
 
 ```bash
-make build
+cp cache.env.example cache.env
+# edit cache.env:  BS_CACHE_DIR := /abs/path/to/your/shared/build-cache
+make cache-info     # show the resolved cache and whether sdk / toolkit / models are present
+make sdk-libs       # gate: SDK sysroot ships OpenCV / GStreamer / ... (actionable if missing)
 ```
+
+`cache.env` is git-ignored. A command-line override always wins
+(`make build BS_CACHE_DIR=/path/to/cache`). With nothing set, the build
+auto-discovers a sibling `../argus-all/argus-build-cache` that holds a built SDK,
+else falls back to `../argus-build-cache`.
+
+#### Step 4 — Build the packages
+
+```bash
+make build          # fetch SDK -> verify libs -> prep -> compile models -> cross-compile -> package
+```
+
+`make build` is one-shot once the cache is populated; it depends on `fetch-sdk` +
+`sdk-libs` + `build-models`, so a missing SDK or models stops the build with an
+actionable message.
 
 **Individual steps:**
 
 ```bash
+make cache-info     # show the resolved shared-cache location and what is present
 make fetch-sdk      # ensure the cross SDK is present in the shared cache
+make sdk-libs       # verify the SDK sysroot ships OpenCV / GStreamer / ... before building
 make prep           # fetch the RKNN header + runtime into include/
 make build-models   # compile per-SoC .rknn into <cache>/models (needs docker)
 make build-engine   # cross-compile + install for each SoC (build_<soc>/, install/<SOC>/)

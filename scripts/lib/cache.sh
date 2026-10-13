@@ -4,8 +4,11 @@
 # expensive to produce and identical across projects, so they live in a cache
 # OUTSIDE any one repo, built once by brightsign-sdk-builder and reused.
 #
-# Override with ARGUS_CACHE_DIR (absolute recommended; a relative value is
-# resolved against the repo root). The default sits parallel to the repo.
+# Override with BS_CACHE_DIR (absolute recommended; a relative value is resolved
+# against the repo root). The default sits parallel to the repo. The Makefile
+# loads a git-ignored cache.env that typically sets BS_CACHE_DIR, and (when that
+# is unset) auto-discovers the sibling argus-all/argus-build-cache; this file
+# itself stays deterministic so it is unit-testable.
 #   source scripts/lib/cache.sh                 # sets CACHE_DIR SDK_DIR SDK_ENV TOOLKIT_DIR MODELS_DIR
 #   bash scripts/lib/cache.sh print <key>       # cache | sdk | sdk-env | toolkit | models
 #
@@ -15,10 +18,10 @@
 _cache_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "${_cache_lib_dir}/../.." && pwd)}"
 
-if [ -n "${ARGUS_CACHE_DIR:-}" ]; then
-    case "${ARGUS_CACHE_DIR}" in
-        /*) CACHE_DIR="${ARGUS_CACHE_DIR}" ;;
-        *)  CACHE_DIR="${REPO_ROOT}/${ARGUS_CACHE_DIR}" ;;
+if [ -n "${BS_CACHE_DIR:-}" ]; then
+    case "${BS_CACHE_DIR}" in
+        /*) CACHE_DIR="${BS_CACHE_DIR}" ;;
+        *)  CACHE_DIR="${REPO_ROOT}/${BS_CACHE_DIR}" ;;
     esac
 else
     CACHE_DIR="${REPO_ROOT}/../argus-build-cache"

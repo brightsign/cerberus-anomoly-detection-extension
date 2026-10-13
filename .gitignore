@@ -1,6 +1,9 @@
 backups/
 toolkit/
 staging/
+downloads/
+# Box-specific shared-cache location (points the build at the external SDK)
+cache.env
 *.rknn
 # RKNN header + runtime fetched by scripts/prep.sh (Rockchip proprietary; not vendored)
 include/rknn_api.h

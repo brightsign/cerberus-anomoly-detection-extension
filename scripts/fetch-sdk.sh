@@ -57,20 +57,23 @@ if [ -z "${INSTALLER}" ]; then
     INSTALLER="$(ls ./${INSTALLER_GLOB} 2>/dev/null | head -n1 || true)"
 fi
 
-if [ -z "${INSTALLER}" ] || [ ! -f "${INSTALLER}" ]; then
+# Printed when the SDK is absent and we cannot (or are told not to) auto-build it.
+print_sdk_guidance() {
     cat <<EOF
 No cross-compile SDK found in the shared cache, and no toolchain installer on hand.
 
 The SDK is built ONCE per build box by the brightsign-sdk-builder repo
 (https://github.com/brightsign/brightsign-sdk-builder): it downloads the
 BrightSign OS source and builds the SDK + RKNN toolkit + rknn_tk2 image into the
-shared cache this repo reads. You only do this once -- the cache is shared, so
-many of our example extensions reuse it.
+shared cache this repo reads. The cache is shared, so many of our example
+extensions reuse it.
 
-Clone (or locate) brightsign-sdk-builder and run it once:
+This build normally auto-builds the SDK for you; it did not here (auto-build
+disabled, or git/docker/network unavailable, or the builder could not be
+located). To do it by hand:
 
     git clone https://github.com/brightsign/brightsign-sdk-builder.git
-    cd brightsign-sdk-builder && make build
+    make -C brightsign-sdk-builder sdk ARGUS_CACHE_DIR=${CACHE_DIR}
 
 That populates ${SDK_DIR}. Then re-run this build.
 
@@ -83,18 +86,67 @@ Do NOT symlink or copy in an already-extracted sdk/ directory relocated for a
 different path -- its baked paths will fail. Always install with -d pointed at the
 shared cache path so OE relocation bakes the right path in.
 EOF
-    exit 1
+}
+
+# Find a brightsign-sdk-builder checkout to build the SDK with; clone one next to
+# the cache if none is present. Honors SDK_BUILDER_DIR, then known siblings, then
+# GitHub. Prints the resolved path on stdout; all chatter goes to stderr.
+locate_sdk_builder() {
+    if [ -n "${SDK_BUILDER_DIR:-}" ]; then
+        if [ -f "${SDK_BUILDER_DIR}/Makefile" ]; then (cd "${SDK_BUILDER_DIR}" && pwd); return 0; fi
+        echo "SDK_BUILDER_DIR=${SDK_BUILDER_DIR} has no Makefile" >&2; return 1
+    fi
+    local d
+    for d in \
+        "${REPO_ROOT}/../argus-all/brightsign-sdk-builder" \
+        "${REPO_ROOT}/../brightsign-sdk-builder" \
+        "${CACHE_DIR}/../brightsign-sdk-builder"; do
+        if [ -f "${d}/Makefile" ]; then (cd "${d}" && pwd); return 0; fi
+    done
+    local clone_dir="${CACHE_DIR%/}/../brightsign-sdk-builder"
+    echo "brightsign-sdk-builder not found locally; cloning into ${clone_dir}..." >&2
+    if command -v git >/dev/null 2>&1 && \
+       git clone --depth 1 https://github.com/brightsign/brightsign-sdk-builder.git "${clone_dir}" >&2; then
+        (cd "${clone_dir}" && pwd); return 0
+    fi
+    return 1
+}
+
+# Build just the SDK into THIS cache. brightsign-sdk-builder selects its output
+# with ARGUS_CACHE_DIR, so pass our absolute CACHE_DIR; it installs into SDK_DIR.
+auto_build_sdk() {
+    local builder
+    builder="$(locate_sdk_builder)" || return 1
+    echo "==> No SDK in the cache and no installer on hand." >&2
+    echo "==> Auto-building the cross SDK into the shared cache." >&2
+    echo "    builder : ${builder}" >&2
+    echo "    cache   : ${CACHE_DIR}" >&2
+    echo "    This needs Docker + network + ~25GB and takes HOURS." >&2
+    echo "    (Set BS_SDK_AUTOBUILD=0 to disable and get manual instructions instead.)" >&2
+    make -C "${builder}" sdk ARGUS_CACHE_DIR="${CACHE_DIR}" 1>&2
+}
+
+if [ -z "${INSTALLER}" ] || [ ! -f "${INSTALLER}" ]; then
+    # No installer: auto-build the SDK into the (configured-but-empty) cache,
+    # unless disabled. This is what makes `make build` provision the SDK on a
+    # fresh box without a separate manual step.
+    if [ "${BS_SDK_AUTOBUILD:-1}" = "1" ]; then
+        auto_build_sdk || { print_sdk_guidance; exit 1; }
+    else
+        print_sdk_guidance
+        exit 1
+    fi
+else
+    echo "Installing SDK from ${INSTALLER} into ${SDK_DIR} (self-relocating)..."
+    chmod +x "${INSTALLER}"
+    # -y: non-interactive. -d: install (and relocate all baked absolute paths,
+    # including the cross-toolchain binaries' ELF INTERP/RPATH) into SDK_DIR.
+    "${INSTALLER}" -y -d "${SDK_DIR}"
 fi
 
-echo "Installing SDK from ${INSTALLER} into ${SDK_DIR} (self-relocating)..."
-chmod +x "${INSTALLER}"
-# -y: non-interactive. -d: install (and relocate all baked absolute paths,
-# including the cross-toolchain binaries' ELF INTERP/RPATH) into SDK_DIR.
-"${INSTALLER}" -y -d "${SDK_DIR}"
-
 if ! sdk_is_self_consistent; then
-    echo "ERROR: SDK installed but environment-setup-aarch64-oe-linux does not" >&2
-    echo "reference ${SDK_DIR} -- relocation did not take effect as expected." >&2
+    echo "ERROR: SDK present but environment-setup-aarch64-oe-linux does not" >&2
+    echo "reference ${SDK_DIR} -- provisioning did not take effect as expected." >&2
     exit 1
 fi
 

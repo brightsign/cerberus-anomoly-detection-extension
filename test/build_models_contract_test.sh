@@ -15,7 +15,7 @@ mkdir -p "$TMP/RK3588"
 : > "$TMP/RK3588/mobilenetv2_config.json"
 
 # DOCKER points at /bin/false: if the script tries docker on a complete SOC, it fails.
-out="$(DOCKER=/bin/false ARGUS_CACHE_DIR="$TMP/cache" bash "$SH" "$TMP" RK3588 2>&1)"; rc=$?
+out="$(DOCKER=/bin/false BS_CACHE_DIR="$TMP/cache" bash "$SH" "$TMP" RK3588 2>&1)"; rc=$?
 { [ "$rc" = 0 ] && echo "$out" | grep -qi "skip\|already"; } \
   && echo "  ok   complete SOC skipped (no docker)" || { echo "  FAIL idempotency rc=$rc out=$out"; fail=1; }
 
